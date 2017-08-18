@@ -1,0 +1,1862 @@
+#! /bin/bash
+
+############################################################
+############# Type de machine ##############################
+############################################################
+# Le type de machine correspond à la machine que tu souhaite
+# installer. 1 Correspond à la main proxmox. 2 Correspond à
+# la machine proxmox secondaire. 3 Correspond à un routeur.
+# 4 Correspond à une machine debian frontal. 5 Correspond
+# à une machine basique.
+# !!!!! Un serveur DB doit être créé avant le routeur !!!!!!!
+
+typeM=4;
+
+#############################################################
+############# Variables #####################################
+#############################################################
+
+########### Pour la machine à installer #####################
+
+NMachine="3"; #N° de la machine qui servira d'IP
+UAdmin="god"; #Utilisateur admin à créer obligatoirement, eviter l'utilisateur admin. Et tout mettre en minuscule.
+MDPAdmin="IamGod"; #Son MDP
+Domaine="unit6b.fr"; #Dommaine du serveur
+Mail="studyfranco@hotmail.fr"; #Mail où sera envoyé les logs
+
+############ Pour toute les installations ###################
+
+
+
+##############################################################
+
+############ Pour l'installation de type 1 et 2 et 4 #########
+
+VPNPort="1200"; #Port du VPN de votre serveur proxmox principal
+
+##############################################################
+
+############ Pour l'installation de type 3,4 et 5 ############
+
+IPProxProch="10.0.0.1"; #Machine proxmox qui vous héberge (Pour éviter d'emcombrer le VPN)
+DNSS=$IPProxProch; #IP serveur DNS pour les machines debian
+NTP="$IPProxProch"; #Serveur NTP à utiliser
+IntDeb="ens33" #Nom de l'interface de votre machine
+
+##############################################################
+
+############ Pour l'installation de type 1 et 2  #############
+
+SPDNS="8.8.8.8"; #Serveur DNS primaire, celui de votre hébergeur de préférence
+
+##############################################################
+
+############ Pour l'installation de type 2 et 4 ##############
+
+IPProxMaitreExt="192.168.0.200"; #IP de la machine maitre dans le reseau externe
+IPProxMaitre="10.0.0.1"; #IP de la machine maitre dans le reseau interne.
+ProxUAdmin=$UAdmin; #Utilisateur admin du prox.
+ProxMDPAdmin=$MDPAdmin; #Son MDP
+
+##############################################################
+
+############ Pour l'installation de type 1 ###################
+
+Ncluster="WSGInfra"; #Le Nom du cluster de l'infrastructure
+
+##############################################################
+
+############ Pour l'installation de type 3 ###################
+
+IPRout="2.25.15.68" #IP externe de votre routeur (La failover)
+MaskRout="255.255.255.255" #Mask de l'IP failover
+NetRout="156.254.36.24" #Le network du réseau
+BrodcastRout="2.164.230.125" #Le broadcast de votre failover
+IPGatewR="2.25.15.254" #La Gateaway de votre ipfailover
+IntRout="ens34" #Le nom de l'interface de votre routeur sur le reseau externe
+
+##############################################################
+
+############ Pour l'installation de type 4 ###################
+
+MDPOGP=$MDPAdmin #Mot de passe de l'utilisateur OGP.
+
+##############################################################
+
+############ Pour l'installation de type 5 ###################
+
+IPGatew="10.0.0.11" #Ip du routeur du reseau interne, cela vous permet d'accéder au reseau internet avec votre machine
+
+##############################################################
+
+############ Pour l'installation avec DB #####################
+
+NDB="2" #Nombre de DB déjà en place
+NomADB=$UAdmin #Nom de l'administrateur de base de données. Il ne peut que se connecter sur un reseau interne
+MDPADB=$MDPAdmin; #Mot de passe de l'administrateur de la base de donné
+NclusterDB=$Ncluster; #Le Nom du cluster de l'infrastructure
+IPBDMaitreExt=$IPProxMaitreExt; #IP de la machine maitre dans le reseau externe
+IPDBMaitreInt=$IPProxMaitre; #IP de la machine maitre dans le reseau interne.
+DBNomMachine="ProxMaster1" #Nom de la machine contenant la db
+DBUAdmin=$UAdmin; #Utilisateur admin ssh de a DB.
+DBMDPAdmin=$MDPAdmin; #Son MDP
+ListIPAdmin="192.168.0.44" #Liste des IP des admins inséré dans la DB lors de ça création
+
+##############################################################
+
+
+
+
+if [ "$(id -u)" != "0" ]
+then
+    echo ""
+    echo "Must execute the script as root user."
+    echo "--------------------------------------------------------------------------------"
+    exit 1
+fi
+
+cd
+
+
+InfoProxM ()
+{
+echo "__________________________________________________________________
+Bonjour
+Vous allez installer un serveur proxmox Master ! Votre pilié central."
+Recapinfos1
+RecapinfosProx
+RecapinfosProxM
+echo "A la fin de l'installation, connectez vous et dans le dossier root se trouve 2 fichiers.
+Exécutez ./Clust pour créer le cluster Proxmox.
+Exécuter ./ClientCreation.sh Nomdelutilisateur /dossier/du/fichier/tar"
+RecapInfoMariaDB
+RecapinfosF
+}
+
+InfoProxS ()
+{
+echo "__________________________________________________________________
+Bonjour
+Vous allez installer un serveur proxmox Secondaire ! Pensez à avoir un serveur proxmox Master en preminer."
+Recapinfos1
+RecapinfosProx
+RecapinfosProxS
+echo "A la fin de l'installation, connectez vous et dans le dossier root se trouve 1 fichiers.
+Exécutez ./Clust pour vous ajouter au cluster de la machine maitre."
+RecapInfoMariaDB
+RecapinfosF
+}
+
+InfoRouteur ()
+{
+echo "__________________________________________________________________
+Bonjour
+Vous allez installer un serveur routeur ! Vous êtes donc sur une machine proxmox.
+Le routeur est l'interface entre votre reseau interne et le monde extérieur."
+Recapinfos1
+Recapdeb
+RecapinfosRouteur 
+RecapinfosF
+}
+
+InfoDebS ()
+{
+echo "__________________________________________________________________
+Bonjour
+Vous allez installer un serveur debian unique ! Pensez à avoir un serveur proxmox Master en preminer. Si ce n'est le cas, desactivez la partie VPN"
+Recapinfos1
+RecapinfosProx
+RecapinfosProxS
+Recapdeb
+echo "Sachez que l'interface que vous désignez est celle configuré pour le firewall."
+RecapinfosOGP
+RecapInfoMariaDB
+RecapinfosF
+}
+
+InfoDebM ()
+{
+echo "__________________________________________________________________
+Bonjour
+Vous allez installer un serveur debian sur proxmox ! Pensez à avoir un serveur Routeur en preminer. Si ce n'est le cas, fuiez !"
+Recapinfos1
+Recapdeb
+echo "Ip du routeur du reseau interne, cela vous permet d'accéder au reseau internet avec votre machine : $IPGatew"
+RecapInfoMariaDB
+RecapinfosF
+}
+
+RecapInfoMariaDB ()
+{
+echo "__________________________________________________________________
+Vous allez aussi installer une base de donné MariaDB. Lorsque votre mot de passe root vous sera demandé, gardez le bien au frais.
+Voici que qu'il va se passer :
+"
+if [ $NDB -ge 1 ]
+then
+
+    if [ $NDB -eq 1 ]
+    then
+    echo "C'est votre deuxième base de donnée. Elle sera synchronisé avec la première. Grâce au par-feu, personne ne pourra y accéder depuis l'extérieur de votre réseau."
+    fi
+
+    if [ $NDB -gt 1 ]
+    then
+    echo "C'est votre $(($NDB+1)) base de donnée. Elle sera synchronisé avec la première. Grâce au par-feu, personne ne pourra y accéder depuis l'extérieur de votre réseau."
+    fi
+
+echo "Voici les infos sur votre base de données :
+Le Nom du cluster de l'infrastructure : $NclusterDB Le nom doit être le même entre toute vos machine contenant la DB
+IP de la première DB dans le reseau externe : $IPBDMaitreExt
+IP de la première DB dans le reseau interne : $IPDBMaitreInt
+Nom de la première machine contenant la db $DBNomMachine
+Utilisateur admin (ssh) de la première machine contenant la DB : $DBUAdmin:$DBMDPAdmin
+L'utilisateur admin de la base de donné (l'utilisateur administrateur) est $NomADB:$MDPADB"
+
+fi
+
+if [ $NDB -eq 0 ]
+then
+echo "C'est votre première base de donnée. Elle sera seul. Grâce au par-feu, personne ne pourra y accéder depuis l'extérieur de votre réseau.
+Un utilisateur admin de la base de donné (l'utilisateur administrateur) sera créé avec les variable suivantes $NomADB:$MDPADB"
+fi
+echo "_____________________________________________________________________________________________________________________________________"
+}
+
+Recapinfos1 ()
+{
+echo "
+Je me permet de vous faire attendre 5 seconde le temps que vous preniez conscience
+de ce que vous faites.Voici les variable que le serveur va utiliser:
+Numéro de la machine $NMachine
+L'IP de la machine sur le reseau interne sera donc : 10.0.0.$NMachine
+Login de l'utilisateur Admin : $UAdmin:$MDPAdmin !!!!!! Le compte admin ne doit comporter AUCUNE MAJUSCULE !!!!!!
+Le dommaine de votre serveur : $Domaine
+Le hostname de votre machine sera : $NomMachine
+Son email sera : $MailE
+Le mail où sera envoyé les logs : $Mail"
+}
+
+RecapinfosProx ()
+{
+echo "Le port VPN utilisé : $VPNPort"
+}
+
+RecapinfosProxM ()
+{
+echo "Le nom de votre futur cluster sera : $Ncluster"
+}
+
+RecapinfosProxS ()
+{
+echo "IP de la machine maitre dans le reseau externe : $IPProxMaitreExt
+IP de la machine maitre dans le reseau interne : $IPProxMaitre"
+}
+
+Recapdeb ()
+{
+echo "
+Machine proxmox la plus proche de vous sur le réseau interne : $IPProxProch
+IP du serveur DNS utilisé : $DNSS
+Serveur NTP que vous utilisez : $NTP ! Ne vous inquiétez pas, si votre serveur ntp ne fonctionne pas, un autre serveur officiel est utilisé par defaut.
+Nom de l'interface de votre machine : $IntDeb"
+}
+
+
+RecapinfosOGP ()
+{
+echo "Mot de passe de l'utilisateur OGP : $MDPOGP
+Sachez que tout ce dont vous avez besoin pour les serveurs de jeux est installé. Exepté mono. Preférez un serveur windows pour cela."
+}
+
+RecapinfosRouteur ()
+{
+echo "IP externe de votre routeur (La failover) $IPRout
+Masque de l'IP failover : $MaskRout
+Le network du réseau : $NetRout
+Le broadcast de votre failover : $BrodcastRout
+La Gateaway de votre ipfailover : $IPGatewR
+Le nom de l'interface de votre routeur sur le reseau externe : $IntRout
+
+Ce serveur utilise une base de données. Le serveur proxmox maitre est celui contenant théoriquement cette base de données. Voici les infos qu'il utilise :
+L'utilisateur de la DB : $NomADB:$MDPADB
+L'IP de la base de données utilisé $IPProxMaitre
+"
+}
+
+RecapinfosF ()
+{
+echo "
+L'utilisateur root ne sera plus utilisable, pensez à utiliser le nouvelle admin.
+Le firewall fonctionne avec une base de données MariaDB ou MySQL. Je vous invite donc à ne pas enlever son installation.
+Mail de l'auteur de ce script : studyfranco@gmail.com
+Si vous constatez des bug ou vous avez des suggestions, n'hésitez pas à envoyer un mail !
+Dans l'état actuel, aucune commande de test n'est mise en place. Si une erreur s'est produite vous devrez le diagnostiquer vous même.
+_________________________________________________________________________"
+read -p "Press [Enter] key to start "
+}
+
+
+Admin ()
+{
+apt-get -q update && apt-get -y -q install sudo sendemail openssh-server
+useradd -m --groups sudo -s /bin/bash $UAdmin
+echo $UAdmin:$MDPAdmin | chpasswd;
+sed -i 's/PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config;
+echo 'ip=`echo $SSH_CONNECTION | cut -d " " -f 1`
+hostname=`hostname`
+logger -t ssh-wrapper $USER login from $ip
+echo "User $USER just logged in from $ip" | sendemail -q -u "SSH Login" -f "SSH Alert<ssh@$hostname>" -t "Nom <lemailquejeveux>" &' > /etc/ssh/sshrc
+sed -i "s/lemailquejeveux/$Mail/" /etc/ssh/sshrc
+}
+
+AutoMaj ()
+{
+    apt-get -y -q install cron-apt;
+    grep security /etc/apt/sources.list > /etc/apt/security.sources.list;
+    echo 'APTCOMMAND=/usr/bin/aptitude
+OPTIONS="-o quiet=1 -o Dir::Etc::SourceList=/etc/apt/security.sources.list"
+MAILTO="deimos@deimos.fr"
+MAILON="always"' >  /etc/cron-apt/config;
+sed -i "s/deimos@deimos.fr/$Mail/" /etc/cron-apt/config;
+    echo 'autoclean -y
+dist-upgrade -y -o APT::Get::Show-Upgraded=true' > /etc/cron-apt/action.d/3-download;
+    
+}
+
+ClustB1 ()
+{
+cd
+echo '#!/bin/bash
+if [ "$(id -u)" != "0" ]
+then
+    echo ""
+    echo "Must execute the script as root user."
+    echo "--------------------------------------------------------------------------------"
+    exit 1
+fi' > Clust
+}
+
+ClustB2 ()
+{
+echo 'cd
+rm -f $0;' >> Clust
+chmod 700 Clust
+}
+
+ClustM ()
+{
+ClustB1
+echo "pvecm create $Ncluster" >> Clust
+ClustB2
+}
+
+ClustS ()
+{
+ClustB1
+echo "pvecm add $IPProxMaitre" >> Clust
+ClustB2
+}
+
+DebMini ()
+{
+    /etc/init.d/nfs-common stop
+    update-rc.d -f nfs-common remove
+    apt-get purge -y -f -m -q apache* php5* samba* fetchmail* procmail* bind9* courier-authlib maildrop expect openntpd ntpdate bluez bluetooth portmap
+    echo "domain $Domaine
+search $Domaine
+nameserver $DNSS" > /etc/resolv.conf
+apt-get -y -f -m -q --purge autoremove
+apt-get -y -q autoclean
+}
+
+DebIP ()
+{
+apt-get -y install net-tools
+echo "# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+auto $IntDeb
+iface $IntDeb inet static
+        address 10.0.0.$NMachine
+        netmask 255.0.0.0
+        network 10.0.0.0
+        broadcast 10.255.255.255
+        gateway $IPGatew"
+}
+
+DebIPR ()
+{
+apt-get -y install net-tools
+sed -i 's/^#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+echo "# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+# The primary network interface
+auto $IntDeb
+iface $IntDeb inet static
+        address 10.0.0.$NMachine
+        netmask 255.0.0.0
+        network 10.0.0.0
+        broadcast 10.255.255.255
+
+# The primary network interface
+auto $IntRout
+iface $IntRout inet static
+        address $IPRout
+        netmask $MaskRout
+        network $NetRout
+        broadcast $BrodcastRout
+        post-up route add $IPGatewR dev $IntRout
+        post-up route add default gw $IPGatewR
+        post-down route del $IPGatewR dev $IntRout
+        post-down route del default gw $IPGatewR"
+}
+
+DebS ()
+{
+echo "deb http://ftp.fr.debian.org/debian/ stretch main contrib non-free
+deb-src http://ftp.fr.debian.org/debian/ stretch main contrib non-free
+
+deb http://security.debian.org/debian-security stretch/updates main contrib non-free
+deb-src http://security.debian.org/debian-security stretch/updates main contrib non-free
+
+deb http://ftp.fr.debian.org/debian/ stretch-updates main contrib non-free
+deb-src http://ftp.fr.debian.org/debian/ stretch-updates main contrib non-free" > /etc/apt/sources.list
+
+}
+
+DebB ()
+{
+DebIP
+DebS
+}
+
+ProxGen ()
+{
+sed -i 's/^/#/' /etc/apt/sources.list.d/pve-enterprise.list;
+echo "deb http://download.proxmox.com/debian/pve stretch pve-no-subscription" >> /etc/apt/sources.list.d/pve-enterprise.list;
+apt-get -q update && apt-get -q -y dist-upgrade && apt-get -y install fail2ban && apt-get -y install whois;
+sed -i 's/^maxretry = 5/maxretry = 3/' /etc/fail2ban/jail.conf;
+sed -i "s/^destemail = root@localhost/destemail = $Mail/" /etc/fail2ban/jail.conf;
+sed -i "s/^sender = root@localhost/sender = $MailE/" /etc/fail2ban/jail.conf;
+sed -i 's/^bantime  = 600/bantime  = 60000/' /etc/fail2ban/jail.conf;
+#sed -i 's/^mta = sendmail/mta = postfix/' /etc/fail2ban/jail.conf;
+sed -i 's/^action = %(action_)s/action = %(action_mwl)s/' /etc/fail2ban/jail.conf;
+cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local;
+echo '[recidive]
+enabled = true' > /etc/fail2ban/jail.d/wsg.conf;
+echo "options dummy numdummies=1" > /etc/modprobe.d/dummy.conf;
+modprobe dummy;
+echo "auto vmbr1
+iface vmbr1 inet static
+        address  10.0.0.$NMachine
+        netmask  255.0.0.0
+        bridge_ports dummy0
+        bridge_stp off
+        bridge_fd 0
+        post-up route add -net 224.0.0.0 netmask 240.0.0.0 dev vmbr1
+        post-up ( echo 1 > /sys/devices/virtual/net/vmbr1/bridge/multicast_querier )" >> /etc/network/interfaces;
+IPMachine=$(grep -m 2 -e "\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) [a-zA-Z0-9.]\+\( [a-zA-Z0-9.]\+\)*" /etc/hosts | sed -n '$p' | sed "s/\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) [a-zA-Z0-9.]\+\( [a-zA-Z0-9.]\+\)*/\1/") #Ip public de la machine (Interface principal)
+sed -i 's/^#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+}
+
+HostProx ()
+{
+    sed -ie "2,// s/\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) [a-zA-Z0-9.]\+\( [a-zA-Z0-9.]\+\)*/\1 $MailE $NomMachine/" /etc/hosts
+    sed -i "/^127/a\10.0.0.$NMachine $NomMachine.local $NomMachine pvelocalhost" /etc/hosts
+    echo "$NomMachine" > /etc/hostname
+}
+
+HostDeb ()
+{
+    sed -i "/^127/a\10.0.0.$NMachine $NomMachine.local $NomMachine" /etc/hosts
+    sed -ie "3,// s/\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) [a-zA-Z0-9.]\+\( [a-zA-Z0-9.]\+\)*//" /etc/hosts
+    echo "$NomMachine" > /etc/hostname
+}
+
+MajSys ()
+{
+apt-get -q update && apt-get -y -q dist-upgrade
+}
+
+FireWall1 ()
+{
+echo -n '#! /bin/bash
+### BEGIN INIT INFO
+# Provides:          AjoutIPBan
+# Required-Start:    $all
+# Required-Stop:     $local_fs $remote_fs
+# Should-Stop:       $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Ban all attaquant
+# Description:       Ce petit bijou, rajoute toute les IP qui ont attaqué le serveur dans la journée dans la liste des IP bans.
+### END INIT INFO
+
+grep "Ban" /var/log/fail2ban.log  | sed -e "s/^.* \([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)/\1/" | uniq > /root/ip
+grep "DENY" /etc/hosts.deny | sed -e "s/^.* \([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\) .*/\1/" | uniq >> /root/ip
+ListIPB=$(grep "" /root/ip | sort | uniq ' > /etc/init.d/ajoutban
+
+echo -n "| sed ':a;N;" >> /etc/init.d/ajoutban
+echo -n '$!ba;s/\n/,/g' >> /etc/init.d/ajoutban
+echo "')" >> /etc/init.d/ajoutban
+
+echo -n "
+BDU=\"black${NomMachine,,}\"
+PassU=\"Mrkkj57?\"
+host=\"127.0.0.1\"
+
+IFS=',' read -ra LIPB <<<" >> /etc/init.d/ajoutban
+
+echo ' $ListIPB;
+echo -n "" > /root/banfirewall.sql
+for IPB in "${LIPB[@]}"
+do
+    echo "INSERT INTO firewall.ip_black VALUES (NULL , \"$IPB\", \"Ban Auto\");" >> /root/banfirewall.sql
+done
+mysql -u $BDU -p$PassU -h $host < /root/banfirewall.sql
+rm -rf /root/ip
+rm -rf /root/banfirewall.sql
+/etc/init.d/firewall restart' >> /etc/init.d/ajoutban
+
+chmod 700 /etc/init.d/ajoutban
+crontab < <(crontab -l ; echo "55 3 * * * /etc/init.d/ajoutban")
+
+echo '#! /bin/bash
+### BEGIN INIT INFO
+# Provides:          firewall
+# Required-Start:    $all
+# Required-Stop:     $local_fs $remote_fs
+# Should-Stop:       $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start/stop firewall
+# Description:       Start/stop firewall, a script to set/unset your custom fir
+### END INIT INFO
+ 
+IPT=/sbin/iptables'> /etc/init.d/firewall;
+echo "
+BDU=\"fw${NomMachine,,}\"
+PassU=\"KylH34pS\"
+host=\"127.0.0.1\"
+#
+# Function that set the firewall rules
+#
+set_rules()
+{
+        # On réinitialise le firewall
+        flush_rules" >> /etc/init.d/firewall;
+
+}
+
+FireWallProx1 ()
+{
+echo '
+
+        # On autorise les connexions dont l état est RELATED ou ESTABLISHED
+        $IPT -A INPUT -i vmbr0 -m state --state ESTABLISHED,RELATED -j ACCEPT
+ 
+        # On autorise le serveur à répondre aux requêtes ICMP (ping)
+        $IPT -A INPUT -i vmbr0 -p icmp -j ACCEPT
+
+        # !! ACCES SSH !! NE PAS COMMENTER CETTE LIGNE !!
+        $IPT -A INPUT -i vmbr0 -p tcp --dport 22 -j ACCEPT #SSH' >> /etc/init.d/firewall;
+}
+
+
+FireWallPS ()
+{
+apt-get -q update && apt-get -y install portsentry
+echo "10.0.0.0/8" >> /etc/portsentry/portsentry.ignore.static
+sed -i 's/^BLOCK_UDP="0"/BLOCK_UDP="1"/' /etc/portsentry/portsentry.conf;
+sed -i 's/^BLOCK_TCP="0"/BLOCK_TCP="1"/' /etc/portsentry/portsentry.conf;
+sed -i 's/^SCAN_TRIGGER="0"/SCAN_TRIGGER="1"/' /etc/portsentry/portsentry.conf;
+sed -i 's/^TCP_MODE="tcp"/TCP_MODE="atcp"/' /etc/default/portsentry;
+sed -i 's/^UDP_MODE="udp"/UDP_MODE="audp"/' /etc/default/portsentry;
+IPT='$IPT'
+echo '
+        # Ports ouvert contre le scan de port
+' >> /etc/init.d/firewall;
+line=$(grep -e "^TCP_PORTS" /etc/portsentry/portsentry.conf);
+line="$( cut -d '=' -f 2 <<< "$line" )";
+line=$(sed 's/"//'g <<< $line);
+IFS=',' read -ra ports <<< "$line";
+for port in "${ports[@]}"
+do
+    echo "        $IPT -A INPUT -i vmbr0 -p tcp --dport $port -j ACCEPT" >> /etc/init.d/firewall;
+done
+line=$(grep -e "^UDP_PORTS" /etc/portsentry/portsentry.conf);
+line="$( cut -d '=' -f 2 <<< "$line" )";
+line=$(sed 's/"//'g <<< $line);
+IFS=',' read -ra ports <<< "$line";
+for port in "${ports[@]}"
+do
+    echo "        $IPT -A INPUT -i vmbr0 -p udp --dport $port -j ACCEPT" >> /etc/init.d/firewall;
+done
+
+}
+
+NATPAT ()
+{
+LIP='$LIP'
+line='$line'
+echo '
+    # Nat du reseau interne
+    $IPT -t nat -A POSTROUTING -o vmbr0 -s 10.0.0.0/8 -j MASQUERADE
+
+    #Pat de l extérieur a l interieur' >> /etc/init.d/firewall
+
+echo -n '    LIP=$(echo "SELECT prot,ipc,portc,ipd,portd FROM firewall.pat' >> /etc/init.d/firewall
+echo -n "${NomMachine,,}" >> /etc/init.d/firewall
+echo -n '" | mysql -u $BDU -p$PassU -h $host | sed ' >> /etc/init.d/firewall
+echo -n "'" >> /etc/init.d/firewall
+echo -n ':a;N;$!ba;s/\n/\n/g' >> /etc/init.d/firewall
+echo -n "' | sed '1d' | sed ':a;N;" >> /etc/init.d/firewall
+echo -n '$!ba;s/\n/,/g' >> /etc/init.d/firewall
+echo "')
+    IFS=',' read -ra infos <<< \"$LIP\"" >> /etc/init.d/firewall
+echo '    for line in "${infos[@]}"
+    do' >> /etc/init.d/firewall
+echo -n '      line=$(sed -e '>> /etc/init.d/firewall
+echo "'s/\t/,/'g <<< $line)
+        IFS=',' read -ra info <<< \"$line\"" >> /etc/init.d/firewall
+echo '      $IPT -t nat -A PREROUTING -d ${info[1]} -p ${info[0]} --dport ${info[2]} -j DNAT --to-destination ${info[3]}:${info[4]}    
+    done' >> /etc/init.d/firewall;
+
+echo "USE firewall
+CREATE TABLE IF NOT EXISTS pat${NomMachine,,} (
+    id SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    prot VARCHAR(30) NOT NULL,
+    ipc VARCHAR(30) NOT NULL,
+    portc MEDIUMINT NOT NULL,
+    ipd VARCHAR(30) NOT NULL,
+    portd MEDIUMINT NOT NULL,
+    appartenance TEXT,
+    PRIMARY KEY (id)
+);
+CREATE USER 'fw${NomMachine,,}'@'10.0.0.$NMachine' IDENTIFIED BY 'KylH34pS';
+CREATE USER 'black${NomMachine,,}'@'10.0.0.$NMachine' IDENTIFIED BY 'Mrkkj57?';
+GRANT SELECT ON firewall.ip_white TO 'fw${NomMachine,,}'@'10.0.0.$NMachine';
+GRANT SELECT ON firewall.ip_black TO 'fw${NomMachine,,}'@'10.0.0.$NMachine';
+GRANT SELECT ON firewall.pat${NomMachine,,} TO 'fw${NomMachine,,}'@'10.0.0.$NMachine';
+GRANT INSERT ON firewall.ip_black TO 'black${NomMachine,,}'@'10.0.0.$NMachine';" > /root/firewall.sql
+
+mysql -u $NomADB -p$MDPADB -h $IPProxMaitre < /root/firewall.sql
+rm -rf /root/firewall.sql
+
+
+}
+
+FireWallOpenVPN ()
+{
+IPT='$IPT'
+echo "
+        # !! ACCES VPN !! NE PAS COMMENTER CETTE LIGNE !!
+        $IPT -A INPUT -i vmbr0 -p udp --dport $VPNPort -j ACCEPT #VPN" >> /etc/init.d/firewall;
+
+}
+FireWallProx2 ()
+{
+LIP='$LIP'
+echo -n '
+        # Autorisation de toute les IP Admins
+        LIP=$(echo "SELECT ip FROM firewall.ip_white" | mysql -u $BDU -p$PassU -h $host | sed ' >> /etc/init.d/firewall
+echo -n "'" >> /etc/init.d/firewall
+echo -n ':a;N;$!ba;s/\n/\n/g' >> /etc/init.d/firewall
+echo -n "' | sed '1d' | sed ':a;N;" >> /etc/init.d/firewall
+echo -n '$!ba;s/\n/,/g' >> /etc/init.d/firewall
+echo "')
+         IFS=',' read -ra LIP <<< \"$LIP\"" >> /etc/init.d/firewall
+echo '        for ip in "${LIP[@]}"
+        do
+            $IPT -A INPUT -i vmbr0 -s $ip -j ACCEPT
+        done
+
+        # Blocage des IP Black listées'>> /etc/init.d/firewall
+echo -n '        LIP=$(echo "SELECT DISTINCT ip FROM firewall.ip_black" | mysql -u $BDU -p$PassU -h $host | sed ' >> /etc/init.d/firewall
+echo -n "'" >> /etc/init.d/firewall
+echo -n ':a;N;$!ba;s/\n/\n/g' >> /etc/init.d/firewall
+echo -n "' | sed '1d' | sed ':a;N;" >> /etc/init.d/firewall
+echo -n '$!ba;s/\n/,/g' >> /etc/init.d/firewall
+echo "')
+         IFS=',' read -ra LIP <<< \"$LIP\"" >> /etc/init.d/firewall
+echo '        for ip in "${LIP[@]}"
+        do
+            $IPT -A INPUT -i vmbr0 -s $ip -j DROP
+        done
+' >> /etc/init.d/firewall;
+}
+
+FireWallDeb1 ()
+{
+echo '
+        # On autorise les connexions dont l état est RELATED ou ESTABLISHED
+        $IPT -A INPUT -i vmbr0 -m state --state ESTABLISHED,RELATED -j ACCEPT' >> /etc/init.d/firewall;
+}
+
+FireWallDebS ()
+{
+apt-get -q update && apt-get -q -y dist-upgrade && apt-get -y install fail2ban && apt-get -y install whois;
+sed -i 's/^maxretry = 5/maxretry = 3/' /etc/fail2ban/jail.conf;
+sed -i "s/^destemail = root@localhost/destemail = $Mail/" /etc/fail2ban/jail.conf;
+sed -i "s/^sender = root@localhost/sender = $MailE/" /etc/fail2ban/jail.conf;
+sed -i 's/^bantime  = 600/bantime  = 60000/' /etc/fail2ban/jail.conf;
+#sed -i 's/^mta = sendmail/mta = postfix/' /etc/fail2ban/jail.conf;
+sed -i 's/^action = %(action_)s/action = %(action_mwl)s/' /etc/fail2ban/jail.conf;
+cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local;
+echo '[recidive]
+enabled = true' > /etc/fail2ban/jail.d/wsg.conf;
+LP='$LP'
+line='$line'
+echo '  # On autorise le serveur à répondre aux requêtes ICMP (ping)
+        $IPT -A INPUT -i vmbr0 -p icmp -j ACCEPT
+        #On ouvre les port de la machine.
+        for port in "${ports[@]}"
+        do
+            echo "        $IPT -A INPUT -i vmbr0 -p tcp --dport $port -j ACCEPT" >> /etc/init.d/firewall;
+        done' >> /etc/init.d/firewall;
+
+echo -n '    LP=$(echo "SELECT prot,port FROM firewall.ouvport' >> /etc/init.d/firewall
+echo -n "${NomMachine,,}" >> /etc/init.d/firewall
+echo -n '" | mysql -u $BDU -p$PassU -h $host | sed ' >> /etc/init.d/firewall
+echo -n "'" >> /etc/init.d/firewall
+echo -n ':a;N;$!ba;s/\n/\n/g' >> /etc/init.d/firewall
+echo -n "' | sed '1d' | sed ':a;N;" >> /etc/init.d/firewall
+echo -n '$!ba;s/\n/,/g' >> /etc/init.d/firewall
+echo "')
+    IFS=',' read -ra infos <<< \"$LP\"" >> /etc/init.d/firewall
+echo '    for line in "${infos[@]}"
+    do' >> /etc/init.d/firewall
+echo -n '      line=$(sed -e '>> /etc/init.d/firewall
+echo "'s/\t/,/'g <<< $line)
+        IFS=',' read -ra info <<< \"$line\"" >> /etc/init.d/firewall
+echo '      $IPT -A INPUT -i vmbr0 -p ${info[0]} --dport ${info[1]} -j ACCEPT    
+    done' >> /etc/init.d/firewall;
+
+echo "USE firewall
+CREATE TABLE IF NOT EXISTS ouvport${NomMachine,,} (
+    id SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    prot VARCHAR(30) NOT NULL,
+    port MEDIUMINT NOT NULL,
+    appartenance TEXT,
+    PRIMARY KEY (id)
+);
+GRANT SELECT ON firewall.ouvport${NomMachine,,} TO 'fw${NomMachine,,}'@'localhost';" > /root/firewall.sql
+
+if [ $NDB -eq 0 ]
+then
+read -p "Veuiller entrer le mot de passe de la base de donnée. Ne vous trompez pas !" MDPDB
+mysql -uroot -p$MDPDB < /root/firewall.sql
+fi
+
+if [ $NDB -ge 1 ]
+then
+cd
+apt-get -y -q install sshpass;
+mkdir /root/.ssh
+touch /root/.ssh/known_hosts
+ssh-keyscan -H $IPBDMaitreExt > /root/.ssh/known_hosts
+sshpass -p $DBMDPAdmin scp -p /root/firewall.sql $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+mysql -u $NomADB -p$MDPADB -h $IPDBMaitreInt < /home/$DBUAdmin/firewall.sql
+rm -rf /home/$DBUAdmin/firewall.sql
+EOF
+fi
+rm /root/.ssh/known_hosts
+apt-get -y -q remove sshpass
+rm -rf /root/firewall.sql
+}
+
+
+FireWallfinal ()
+{
+echo '
+        # On "drop" tout le reste du traffic
+        $IPT -A INPUT -i vmbr0 -j DROP
+
+return 0
+}
+ 
+#
+# Function that set the firewall rules
+#
+flush_rules()
+{
+        $IPT -F INPUT
+        $IPT -F FORWARD
+        $IPT -F OUTPUT
+        return 0
+}
+ 
+command="$1"
+case "$command" in
+        start|force-start|restart|force-restart|reload|force-reload)
+                flush_rules             
+                set_rules
+                ;;
+
+        stop)
+                flush_rules             
+                ;;
+ 
+        status)
+                $IPT -L
+                ;;
+        *)
+esac' >> /etc/init.d/firewall;
+chmod 700 /etc/init.d/firewall;
+}
+
+FireWProxM ()
+{
+    FireWall1
+    FireWallProx1
+    FireWallProx2
+    FireWallOpenVPN
+    FireWallPS
+    FireWallfinal
+}
+
+FireWProxS ()
+{
+    FireWall1
+    FireWallProx1
+    FireWallProx2
+    FireWallPS
+    FireWallfinal
+}
+
+FireWRout ()
+{
+    FireWall1
+    FireWallDeb1
+    FireWallProx2
+    NATPAT
+    FireWallPS
+    FireWallfinal
+    sed -i "s/vmbr0/$IntDeb/" /etc/init.d/firewall
+    sed -i "s/127.0.0.1/$IPProxMaitre/" /etc/init.d/firewall
+    sed -i "s/127.0.0.1/$IPProxMaitre/" /etc/init.d/ajoutban
+    update-rc.d firewall defaults;
+
+}
+
+FireWDebS ()
+{
+    FireWall1
+    FireWallDeb1
+    FireWallProx2
+    FireWallDebS
+    FireWallPS
+    FireWallfinal
+    sed -i "s/vmbr0/$IntDeb/" /etc/init.d/firewall 
+}
+
+OpenVPNS()
+{
+apt-get -y -q install openvpn openssl bridge-utils libssl-dev liblzo2-2 liblzo2-dev;
+mkdir /etc/openvpn/easy-rsa/;
+cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/;
+chmod -R 700 /etc/openvpn/easy-rsa/;
+sed -i 's/export CA_EXPIRE=3650/export CA_EXPIRE=36500/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_EXPIRE=3650/export KEY_EXPIRE=36500/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_COUNTRY="US"/export KEY_COUNTRY="FR"/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_PROVINCE="CA"/export KEY_PROVINCE="68"/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_CITY="SanFrancisco"/export KEY_CITY="Mulhouse"/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_ORG="Fort-Funston"/export KEY_ORG="WSG"/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_EMAIL="me@myhost.mydomain"/export KEY_EMAIL="parapara"/' /etc/openvpn/easy-rsa/vars;
+sed -i 's/export KEY_OU="MyOrganizationalUnit"/export KEY_OU="Developpement"/' /etc/openvpn/easy-rsa/vars;
+sed -i "s/parapara/$NomMachine@$Domaine/" /etc/openvpn/easy-rsa/vars
+cd /etc/openvpn/easy-rsa/;
+mv openssl-1.0.0.cnf openssl.cnf;
+source ./vars
+./clean-all
+./build-dh
+./build-ca
+./build-key-server $NomMachine
+openvpn --genkey --secret keys/ta.key
+cd keys/
+cp ca.crt ta.key $NomMachine.crt $NomMachine.key dh2048.pem ../..
+cd ../..
+mkdir clientconf
+echo "local $IPMachine
+port $VPNPort
+proto udp
+dev tap0
+ca ca.crt
+cert $NomMachine.crt
+key $NomMachine.key
+dh dh2048.pem
+ifconfig-pool-persist ipp.txt
+server-bridge 10.0.0.1 255.0.0.0 10.0.1.1 10.0.8.254
+client-config-dir cdd
+client-to-client
+keepalive 10 120
+tls-auth ta.key 0
+cipher AES-256-CBC
+comp-lzo
+user nobody
+group nogroup
+persist-key
+persist-tun
+mssfix
+status openvpn-status.log
+log-append openvpn.log
+verb 4
+mode server
+tls-server
+script-security 2
+chroot /etc/openvpn/jail" > server.conf
+echo 'up "/etc/openvpn/up.sh"
+down "down.sh"
+push "explicit-exit-notify 3"
+tmp-dir "tmp"' >> server.conf
+echo "#!/bin/bash
+/sbin/ifconfig vmbr1 promisc
+/sbin/ifconfig tap0 up promisc
+/sbin/brctl addif vmbr1 tap0" > /etc/openvpn/up.sh
+chmod -R 700 /etc/openvpn/easy-rsa/keys
+echo '#!/bin/sh
+
+# Make a certificate/private key pair using a locally generated
+# root certificate.
+
+export EASY_RSA="${EASY_RSA:-.}"
+"$EASY_RSA/pkitool" $*' > /etc/openvpn/easy-rsa/build-key
+chmod -R 700 ./
+mkdir /etc/openvpn/cdd
+chown nobody:nogroup -R /etc/openvpn/cdd
+chmod 770 -R /etc/openvpn/cdd
+mkdir /etc/openvpn/jail
+cd /etc/openvpn/jail
+mkdir tmp
+mkdir cdd
+chown nobody:nogroup -R /etc/openvpn/jail/cdd
+chmod 770 -R /etc/openvpn/jail/cdd
+echo "#!/bin/bash
+/sbin/brctl delif vmbr1 tap0
+/sbin/ifconfig tap0 down -promisc" > /etc/openvpn/jail/down.sh
+chmod 700 /etc/openvpn/jail/down.sh
+cd
+echo '#!/bin/bash
+if [ "$(id -u)" != "0" ]
+then
+    echo ""
+    echo "Must execute the script as root user."
+    echo "----s----------------------------------------------------------------------------"
+    exit 1
+fi
+if [ $# -ne 2 ]
+then
+    echo ""
+    echo "Ce programme se lance avec le nom de l utilisateur en paramètre 1 !"
+    echo "Et en second le dossier où donner les identifiants."
+    echo "--------------------------------------------------------------------------------"
+    exit 1
+fi
+cd /etc/openvpn/easy-rsa
+source ./vars
+./build-key $1
+mkdir /etc/openvpn/clientconf/$1
+cd /etc/openvpn/easy-rsa/keys
+cp ca.crt ta.key $1.crt $1.key ../../clientconf/$1/
+cd /etc/openvpn/clientconf/
+chmod -R 777 /etc/openvpn/clientconf/$1
+tar -cvf $2/$1.tar $1/
+chmod -R 777 $2/$1.tar
+chmod -R 700 /etc/openvpn/clientconf/$1
+chmod -R 700 /etc/openvpn/easy-rsa/keys
+cd' > ClientCreation.sh
+chmod 700 ClientCreation.sh
+echo "# Fail2Ban filter for selected OpenVPN rejections
+#
+#
+
+[Definition]
+
+# Example messages (other matched messages not seen in the testing server's logs):
+# Fri Sep 23 11:55:36 2016 TLS Error: incoming packet authentication failed from [AF_INET]59.90.146.160:51223
+# Thu Aug 25 09:36:02 2016 117.207.115.143:58922 TLS Error: TLS handshake failed
+
+failregex = ^ TLS Error: incoming packet authentication failed from \[AF_INET\]<HOST>:\d+$
+            ^ <HOST>:\d+ Connection reset, restarting
+            ^ <HOST>:\d+ TLS Auth Error
+            ^ <HOST>:\d+ TLS Error: TLS handshake failed$
+            ^ <HOST>:\d+ VERIFY ERROR
+
+ignoreregex = " > /etc/fail2ban/filter.d/openvpn.conf;
+echo "# Fail2Ban configuration fragment for OpenVPN
+
+[openvpn]
+enabled  = true
+port     = $VPNPort
+protocol = udp
+filter   = openvpn
+logpath  = /etc/openvpn/openvpn.log
+maxretry = 3" > /etc/fail2ban/jail.d/openvpn.conf;
+}
+
+OpenVPNC()
+{
+apt-get -y install openvpn bridge-utils liblzo2-2 liblzo2-dev sshpass;
+mkdir /root/.ssh
+touch /root/.ssh/known_hosts
+ssh-keyscan -H $IPProxMaitreExt > /root/.ssh/known_hosts
+sshpass -p $MDPAdmin ssh -x $UAdmin@$IPProxMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+./ClientCreation.sh $NomMachine /home/$UAdmin
+echo "ifconfig-push 10.0.0.$NMachine 255.0.0.0" > /etc/openvpn/jail/cdd/$NomMachine
+chown nobody:nogroup /etc/openvpn/jail/cdd/$NomMachine
+chmod 770 /etc/openvpn/jail/cdd/$NomMachine
+EOF
+cd
+sshpass -p $MDPAdmin scp $UAdmin@$IPProxMaitreExt:$NomMachine.tar ./
+sshpass -p $MDPAdmin ssh -x $UAdmin@$IPProxMaitreExt << EOF
+rm $NomMachine.tar
+EOF
+cd
+tar xvf $NomMachine.tar
+rm $NomMachine.tar
+mv $NomMachine/* /etc/openvpn
+rm -rf $NomMachine
+cd /etc/openvpn
+echo "client
+remote $IPProxMaitreExt $VPNPort
+proto udp
+dev tap0
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+ca ca.crt
+cert $NomMachine.crt
+key $NomMachine.key
+keepalive 10 120
+tls-auth ta.key 1
+cipher AES-256-CBC
+comp-lzo
+user nobody
+group nogroup
+status openvpn-status.log
+log-append openvpn.log
+verb 4
+script-security 2" > client.conf
+rm /root/.ssh/known_hosts
+apt-get -y remove sshpass
+}
+
+OpenVPNCP () {
+echo 'up "/etc/openvpn/up.sh"' >> client.conf
+echo "#!/bin/bash
+/sbin/ifconfig vmbr1 promisc
+/sbin/ifconfig tap0 up promisc
+/sbin/brctl addif vmbr1 tap0" > /etc/openvpn/up.sh
+chmod 700 /etc/openvpn/up.sh
+}
+
+LogWatch ()
+{
+apt-get -y -q install logwatch;
+mkdir /var/cache/logwatch;
+cp /usr/share/logwatch/default.conf/logwatch.conf /etc/logwatch/conf/;
+sed -i "s/^MailTo = root/MailTo = $Mail/" /etc/logwatch/conf/logwatch.conf;
+sed -i "s/^MailFrom = Logwatch/MailFrom = $MailE/" /etc/logwatch/conf/logwatch.conf;
+sed -i 's/^Detail = Low/Detail = Med/' /etc/logwatch/conf/logwatch.conf;
+sed -i "s/^Output = stdout/Output = mail/" /etc/logwatch/conf/logwatch.conf;
+sed -i 's/^Format = text/Format = html/' /etc/logwatch/conf/logwatch.conf;
+}
+
+MariaDbB ()
+{
+apt-get -y -q install software-properties-common dirmngr
+apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 0xF1656F24C74CD1D8
+echo '
+#Source DB
+deb [arch=i386,amd64] http://fr.mirror.babylon.network/mariadb/repo/10.2/debian stretch main
+deb-src http://fr.mirror.babylon.network/mariadb/repo/10.2/debian stretch main' >> /etc/apt/sources.list
+echo 'Package: *
+Pin: release o=MariaDB
+Pin-Priority: 1000' > /etc/apt/preferences.d/mariadb
+apt-get -q update
+apt-get -y -q install mariadb-server rsync
+systemctl stop mysql
+}
+
+MariaDbF ()
+{
+echo '# MariaDB database server configuration file.
+#
+# You can copy this file to one of:
+# - "/etc/mysql/my.cnf" to set global options,
+# - "~/.my.cnf" to set user-specific options.
+#
+# One can use all long options that the program supports.
+# Run program with --help to get a list of available options and with
+# --print-defaults to see which it would actually understand and use.
+#
+# For explanations see
+# http://dev.mysql.com/doc/mysql/en/server-system-variables.html
+
+# This will be passed to all mysql clients
+# It has been reported that passwords should be enclosed with ticks/quotes
+# escpecially if they contain "#" chars...
+# Remember to edit /etc/mysql/debian.cnf when changing the socket location.
+[client]
+port            = 3306
+socket          = /var/run/mysqld/mysqld.sock
+
+# Here is entries for some specific programs
+# The following values assume you have at least 32M ram
+
+# This was formally known as [safe_mysqld]. Both versions are currently parsed.
+[mysqld_safe]
+socket          = /var/run/mysqld/mysqld.sock
+nice            = 0
+
+[mysqld]
+#
+# * Basic Settings
+#
+user            = mysql
+pid-file        = /var/run/mysqld/mysqld.pid
+socket          = /var/run/mysqld/mysqld.sock
+port            = 3306
+basedir         = /usr
+datadir         = /var/lib/mysql
+tmpdir          = /tmp
+lc_messages_dir = /usr/share/mysql
+lc_messages     = en_US
+skip-external-locking
+#
+# Instead of skip-networking the default is now to listen only on
+# localhost which is more compatible and is not less secure.
+bind-address=0.0.0.0
+#
+# * Fine Tuning
+#
+max_connections         = 100
+connect_timeout         = 5
+wait_timeout            = 600
+max_allowed_packet      = 16M
+thread_cache_size       = 128
+sort_buffer_size        = 4M
+bulk_insert_buffer_size = 16M
+tmp_table_size          = 32M
+max_heap_table_size     = 32M
+#
+# * MyISAM
+# 
+# This replaces the startup script and checks MyISAM tables if needed
+# the first time they are touched. On error, make copy and try a repair.
+myisam_recover_options = BACKUP
+key_buffer_size         = 128M
+#open-files-limit       = 2000
+table_open_cache        = 400
+myisam_sort_buffer_size = 512M
+concurrent_insert       = 2
+read_buffer_size        = 2M
+read_rnd_buffer_size    = 1M
+# 
+# * Query Cache Configuration
+# 
+# Cache only tiny result sets, so we can fit more in the query cache.
+query_cache_limit               = 128K
+query_cache_size                = 64M
+# for more write intensive setups, set to DEMAND or OFF
+#query_cache_type               = DEMAND
+# 
+# * Logging and Replication
+#
+# Both location gets rotated by the cronjob.
+# Be aware that this log type is a performance killer.
+# As of 5.1 you can enable the log at runtime!
+#general_log_file        = /var/log/mysql/mysql.log
+#general_log             = 1
+#
+# Error logging goes to syslog due to /etc/mysql/conf.d/mysqld_safe_syslog.cnf.
+# 
+# we do want to know about network errors and such
+log_warnings            = 2
+#
+# Enable the slow query log to see queries with especially long duration
+#slow_query_log[={0|1}]
+slow_query_log_file     = /var/log/mysql/mariadb-slow.log
+long_query_time = 10
+#log_slow_rate_limit    = 1000
+log_slow_verbosity      = query_plan
+
+#log-queries-not-using-indexes
+#log_slow_admin_statements
+# 
+# The following can be used as easy to replay backup logs or for replication.
+# note: if you are setting up a replication slave, see README.Debian about
+#       other settings you may need to change.
+#server-id              = 1
+#report_host            = master1
+#auto_increment_increment = 2
+#auto_increment_offset  = 1
+log_bin                 = /var/log/mysql/mariadb-bin
+log_bin_index           = /var/log/mysql/mariadb-bin.index
+# not fab for performance, but safer
+#sync_binlog            = 1
+expire_logs_days        = 10
+max_binlog_size         = 100M
+# slaves
+#relay_log              = /var/log/mysql/relay-bin
+#relay_log_index        = /var/log/mysql/relay-bin.index
+#relay_log_info_file    = /var/log/mysql/relay-bin.info
+#log_slave_updates
+#read_only
+#
+# If applications support it, this stricter sql_mode prevents some
+# mistakes like inserting invalid dates etc.
+#sql_mode               = NO_ENGINE_SUBSTITUTION,TRADITIONAL
+#
+# * InnoDB
+#
+# InnoDB is enabled by default with a 10MB datafile in /var/lib/mysql/.
+# Read the manual for more InnoDB related options. There are many!
+default_storage_engine  = InnoDB
+# you cant just change log file size, requires special procedure
+#innodb_log_file_size   = 50M
+#innodb_buffer_pool_size = 256M
+innodb_log_buffer_size  = 8M
+innodb_file_per_table   = 1
+innodb_open_files       = 400
+innodb_io_capacity      = 400
+innodb_flush_method     = O_DIRECT
+#
+# * Security Features
+# 
+# Read the manual, too, if you want chroot!
+# chroot = /var/lib/mysql/
+#
+# For generating SSL certificates I recommend the OpenSSL GUI "tinyca".
+# 
+# ssl-ca=/etc/mysql/cacert.pem
+# ssl-cert=/etc/mysql/server-cert.pem
+# ssl-key=/etc/mysql/server-key.pem
+
+# 
+# * Galera-related settings
+#
+[galera]
+# Mandatory settings
+#wsrep_on=ON
+#wsrep_provider=
+#wsrep_cluster_address=
+#binlog_format=row
+#default_storage_engine=InnoDB
+#innodb_autoinc_lock_mode=2
+# 
+# Allow server to accept connections on all interfaces.
+#
+#bind-address=0.0.0.0
+#
+# Optional setting
+#wsrep_slave_threads=1
+#innodb_flush_log_at_trx_commit=0
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet      = 16M
+
+[mysql]
+#no-auto-rehash # faster start of mysql but no tab completion
+
+[isamchk]
+key_buffer              = 16M
+
+# 
+# * IMPORTANT: Additional settings that can override those from this file!
+#   The files must end with .cnf, otherwise theyll be ignored.
+# 
+!includedir /etc/mysql/conf.d/' > /etc/mysql/my.cnf
+
+systemctl start mysql
+sleep 3
+
+echo "CREATE DATABASE firewall;
+USE firewall
+CREATE TABLE IF NOT EXISTS ip_white (
+    id SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    ip VARCHAR(30) NOT NULL,
+    appartenance TEXT,
+    PRIMARY KEY (id)
+);
+CREATE TABLE IF NOT EXISTS ip_black (
+    id SMALLINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    ip VARCHAR(30) NOT NULL,
+    appartenance TEXT,
+    PRIMARY KEY (id)
+);
+CREATE USER 'fwlapin75'@'localhost' IDENTIFIED BY 'KylH34pS';
+CREATE USER 'blacklapin75'@'localhost' IDENTIFIED BY 'Mrkkj57?';
+CREATE USER 'admin'@'10.%' IDENTIFIED BY 'mdpsup';
+GRANT SELECT ON firewall.ip_white TO 'fwlapin75'@'localhost';
+GRANT SELECT ON firewall.ip_black TO 'fwlapin75'@'localhost';
+GRANT INSERT ON firewall.ip_black TO 'blacklapin75'@'localhost';
+GRANT ALL ON *.* TO 'admin'@'10.%' WITH GRANT OPTION;" > /root/firewall.sql
+
+IFS=',' read -ra LIPA <<< $ListIPAdmin;
+for IPA in "${LIPA[@]}"
+do
+    echo "INSERT INTO ip_white VALUES (NULL , \"$IPA\", 'Admin IP');" >> /root/firewall.sql
+done
+
+sed -i "s/lapin75/${NomMachine,,}/" /root/firewall.sql
+sed -i "s/admin/$NomADB/" /root/firewall.sql
+sed -i "s/mdpsup/$MDPADB/" /root/firewall.sql
+
+read -p "Veuiller entrer le mot de passe de la base de donnée. Ne vous trompez pas !" MDPDB
+mysql -uroot -p$MDPDB < /root/firewall.sql
+rm -rf /root/firewall.sql
+}
+
+MariaDBM ()
+{
+echo '[mysqld]
+binlog_format=ROW
+default-storage-engine=innodb
+innodb_autoinc_lock_mode=2
+bind-address=0.0.0.0
+
+[galera]
+# Galera Provider Configuration
+wsrep_on=ON
+wsrep_provider=/usr/lib/galera/libgalera_smm.so
+
+# Galera Cluster Configuration
+wsrep_cluster_name="test_cluster"
+wsrep_cluster_address="gcomm://list_node_ip"
+
+# Galera Synchronization Configuration
+wsrep_sst_method=rsync
+
+# Galera Node Configuration
+wsrep_node_address="this_node_ip"
+wsrep_node_name="this_node_name"
+wsrep_dirty_reads=1' > /etc/mysql/conf.d/galera.cnf
+sed -i "s/list_node_ip/$IPDBMaitreInt,10.0.0.$NMachine/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/this_node_ip/$IPDBMaitreInt/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/this_node_name/$DBNomMachine/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/test_cluster/$NclusterDB/" /etc/mysql/conf.d/galera.cnf
+chmod 644 /etc/mysql/conf.d/galera.cnf
+cd
+apt-get -y -q install sshpass;
+mkdir /root/.ssh
+touch /root/.ssh/known_hosts
+ssh-keyscan -H $IPBDMaitreExt > /root/.ssh/known_hosts
+MariaDBR
+sshpass -p $DBMDPAdmin scp -p /etc/mysql/conf.d/galera.cnf $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin
+sed -i "s/wsrep_node_address=\"$IPDBMaitreInt\"/wsrep_node_address=\"10.0.0.$NMachine\"/" /etc/mysql/conf.d/galera.cnf
+echo 'wsrep_restart_slave=ON' >> /etc/mysql/conf.d/galera.cnf
+sed -i "s/$DBNomMachine/$NomMachine/" /etc/mysql/conf.d/galera.cnf
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+mysqldump -u $NomADB -p$MDPADB -h $IPDBMaitreInt --skip-create-options foobar > /home/$DBUAdmin/foobar.sql
+mv /home/$DBUAdmin/galera.cnf /etc/mysql/conf.d/galera.cnf
+chown root:root /etc/mysql/conf.d/galera.cnf
+chmod 644 /etc/mysql/conf.d/galera.cnf
+systemctl stop mariadb.service
+EOF
+sshpass -p $DBMDPAdmin scp -p $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin/foobar.sql ./
+sleep 2
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+rm -rf /home/$DBUAdmin/foobar.sql
+galera_new_cluster
+EOF
+rm /root/.ssh/known_hosts
+apt-get -y -q remove sshpass
+}
+
+MariaDBS ()
+{
+cd
+apt-get -y -q install sshpass;
+mkdir /root/.ssh
+touch /root/.ssh/known_hosts
+ssh-keyscan -H $IPBDMaitreExt > /root/.ssh/known_hosts
+MariaDBR
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+mv /etc/mysql/conf.d/galera.cnf /home/$DBUAdmin/
+chmod 777 /home/$DBUAdmin/galera.cnf
+EOF
+sshpass -p $DBMDPAdmin scp -p $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin/galera.cnf ./
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+rm -rf /home/$DBUAdmin/galera.cnf
+EOF
+LIPMachine=$(grep -e "wsrep_cluster_address\=\"gcomm\:\/\/\(\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)\,\)*\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)\"" galera.cnf | sed "s/wsrep_cluster_address\=\"gcomm\:\/\/\(\(\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)\,\)*\([0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\.[0-9]\{1,3\}\)\)\"/\1/")
+echo "
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+Pour tout les serveur autre que le principal et celui-ci, Pensez à modifier le fichier /etc/mysql/conf.d/galera.cnf en copiant cette ligne modifié : wsrep_cluster_address=\"$LIPMachine,10.0.0.$NMachine\"
+___________________________________________________________________________________________________________________________________________________________________________________________________________"
+sleep 5
+echo '[mysqld]
+binlog_format=ROW
+default-storage-engine=innodb
+innodb_autoinc_lock_mode=2
+bind-address=0.0.0.0
+
+[galera]
+# Galera Provider Configuration
+wsrep_on=ON
+wsrep_provider=/usr/lib/galera/libgalera_smm.so
+
+# Galera Cluster Configuration
+wsrep_cluster_name="test_cluster"
+wsrep_cluster_address="gcomm://list_node_ip"
+
+# Galera Synchronization Configuration
+wsrep_sst_method=rsync
+
+# Galera Node Configuration
+wsrep_node_address="this_node_ip"
+wsrep_node_name="this_node_name"
+wsrep_dirty_reads=ON' > /etc/mysql/conf.d/galera.cnf
+sed -i "s/list_node_ip/$LIPMachine,10.0.0.$NMachine/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/this_node_name/$DBNomMachine/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/test_cluster/$NclusterDB/" /etc/mysql/conf.d/galera.cnf
+sed -i "s/this_node_ip/$IPDBMaitreInt/" /etc/mysql/conf.d/galera.cnf
+sshpass -p $DBMDPAdmin scp -p /etc/mysql/conf.d/galera.cnf $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin
+sed -i "s/wsrep_node_address=\"$IPDBMaitreInt\"/wsrep_node_address=\"10.0.0.$NMachine\"/" /etc/mysql/conf.d/galera.cnf
+echo 'wsrep_restart_slave=ON' >> /etc/mysql/conf.d/galera.cnf
+sed -i "s/$DBNomMachine/$NomMachine/" /etc/mysql/conf.d/galera.cnf
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+mv /home/$DBUAdmin/galera.cnf /etc/mysql/conf.d/galera.cnf
+chown root:root /etc/mysql/conf.d/galera.cnf
+chmod 644 /etc/mysql/conf.d/galera.cnf
+EOF
+rm -rf galera.cnf
+rm /root/.ssh/known_hosts
+apt-get -y -q remove sshpass
+}
+
+MariaDBR ()
+{
+rm -rf /etc/mysql/my.cnf
+rm -rf /etc/mysql/debian.cnf
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cp /etc/mysql/debian.cnf /home/$DBUAdmin/
+cp /etc/mysql/my.cnf /home/$DBUAdmin/my.cnf
+chmod 777 /home/$DBUAdmin/debian.cnf
+chmod 777 /home/$DBUAdmin/my.cnf
+EOF
+rm -rf /etc/mysql/debian.cnf
+sshpass -p $DBMDPAdmin scp -p $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin/debian.cnf /etc/mysql/
+sshpass -p $DBMDPAdmin scp -p $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin/my.cnf /etc/mysql/
+chown root:root /etc/mysql/debian.cnf
+chown root:root /etc/mysql/my.cnf
+chmod 600 /etc/mysql/debian.cnf
+chmod 644 /etc/mysql/my.cnf
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+rm -rf /home/$DBUAdmin/debian.cnf
+rm -rf /home/$DBUAdmin/my.cnf
+EOF
+}
+
+MariaDBU ()
+{
+echo "CREATE USER 'fwlapin75'@'localhost' IDENTIFIED BY 'KylH34pS';
+CREATE USER 'blacklapin75'@'localhost' IDENTIFIED BY 'Mrkkj57?';
+GRANT SELECT ON firewall.ip_white TO 'fwlapin75'@'localhost';
+GRANT SELECT ON firewall.ip_black TO 'fwlapin75'@'localhost';
+GRANT INSERT ON firewall.ip_black TO 'blacklapin75'@'localhost';" > /root/firewall.sql
+
+sed -i "s/lapin75/${NomMachine,,}/" /root/firewall.sql
+cd
+apt-get -y -q install sshpass;
+mkdir /root/.ssh
+touch /root/.ssh/known_hosts
+ssh-keyscan -H $IPBDMaitreExt > /root/.ssh/known_hosts
+sshpass -p $DBMDPAdmin scp -p /root/firewall.sql $DBUAdmin@$IPBDMaitreExt:/home/$DBUAdmin
+sshpass -p $DBMDPAdmin ssh -x $DBUAdmin@$IPBDMaitreExt << EOF
+echo "$MDPAdmin" | sudo -S su
+sudo su
+cd
+mysql -u $NomADB -p$MDPADB -h $IPDBMaitreInt < /home/$DBUAdmin/firewall.sql
+rm -rf /home/$DBUAdmin/firewall.sql
+EOF
+rm /root/.ssh/known_hosts
+apt-get -y -q remove sshpass
+rm -rf /root/firewall.sql
+}
+
+MariaDB ()
+{
+
+MariaDbB
+if [ $NDB -eq 0 ]
+then
+MariaDbF
+fi
+
+if [ $NDB -eq 1 ]
+then
+MariaDBM
+MariaDBU
+fi
+
+if [ $NDB -gt 1 ]
+then
+MariaDBS
+MariaDBU
+fi
+
+}
+
+NTPM ()
+{
+apt-get -y install ntp
+sed -i "/^restrict 127.0.0.1/a\restrict 10.0.0.0 mask 255.0.0.0 nomodify notrap" /etc/ntp.conf
+sed -i "s/^#NTP=/NTP=127.0.0.1 0.debian.pool.ntp.org/" /etc/systemd/timesyncd.conf
+}
+
+NTPS ()
+{
+apt-get -y install ntp
+sed -i "/^restrict 127.0.0.1/a\restrict 10.0.0.0 mask 255.0.0.0 nomodify notrap" /etc/ntp.conf
+sed -i "s/#server ntp.your-provider.example/server $IPProxMaitre/" /etc/ntp.conf
+sed -i "s/^#NTP=/NTP=127.0.0.1 0.debian.pool.ntp.org/" /etc/systemd/timesyncd.conf
+}
+
+NTPMa ()
+{
+sed -i "s/^#NTP=/NTP=$NTP 0.debian.pool.ntp.org/" /etc/systemd/timesyncd.conf
+}
+
+LauchScript ()
+{
+
+update-rc.d -f openvpn disable
+update-rc.d -f mysql disable
+update-rc.d -f firewall disable
+echo '#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          LauchScript
+# Required-Start:    $all
+# Required-Stop:     $local_fs $remote_fs $syslog $network
+# Should-Stop:       $named $time network-manager
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Start/stop les services essenssiels de la machine
+# Description:       Start/stop 
+### END INIT INFO
+
+
+command="$1"
+case "$command" in
+        start|force-start)
+                sleep 30
+                systemctl start openvpn
+                sleep 2
+                systemctl start mysql
+                sleep 2
+                systemctl start firewall
+                return 0
+                ;;
+
+        restart|reload|force-reload)
+                systemctl stop firewall
+                systemctl stop mysql
+                systemctl stop openvpn
+                sleep 3
+                systemctl start openvpn
+                sleep 2
+                systemctl start mysql
+                sleep 2
+                systemctl start firewall
+                return 0
+                ;;
+        force-restart)
+                /etc/init.d/networking restart
+                systemctl stop firewall
+                systemctl stop mysql
+                systemctl stop openvpn
+                sleep 3
+                systemctl start openvpn
+                sleep 2
+                sed -i "s/safe_to_bootstrap: 0/safe_to_bootstrap: 1/" /var/lib/mysql/grastate.dat
+                galera_new_cluster
+                sleep 2
+                systemctl start firewall
+                return 0
+                ;;
+        stop)
+                systemctl stop firewall
+                systemctl stop mysql
+                systemctl stop openvpn
+                return 0  
+                ;;
+ 
+        status)
+                systemctl status openvpn
+                systemctl status mysql
+                systemctl status firewall
+                return 0
+                ;;
+        *)
+esac' > /etc/init.d/lauchscript
+chmod 700 /etc/init.d/lauchscript
+update-rc.d lauchscript defaults
+}
+
+OGP ()
+{
+useradd -m --groups sudo -s /bin/bash OGP
+echo OGP:$MDPOGP | chpasswd
+apt-get -q update && apt-get -y -q install openjdk-8-jre openjdk-8-jdk libxml-parser-perl libpath-class-perl perl-modules screen rsync e2fsprogs unzip subversion pure-ftpd libarchive-zip-perl libc6 libgcc1 git curl
+apt-get install -y -q libc6-i386 lib32gcc1
+apt-get install -y -q libhttp-daemon-perl
+apt-get install -y -q libarchive-extract-perl
+dpkg --add-architecture i386
+apt-get update
+apt-get install -y -q nasm:i386 build-essential gcc-multilib g++-multilib mailutils postfix curl wget file bzip2 gzip bsdmainutils python util-linux ca-certificates tmux lib32gcc1 libstdc++6 libstdc++6:i386 lib32tinfo5 libcurl4-gnutls-dev:i386 libmariadb2 speex:i386 libtbb2 default-jdk
+wget https://github.com/OpenGamePanel/OGP-Agent-Linux/archive/master.zip
+mv master.zip /home/OGP
+cd /home/OGP/
+unzip master.zip
+rm -rf master.zip
+chown -R OGP:OGP ./
+}
+
+OGPWeb ()
+{
+apt-get install apache2 curl subversion php5 php5-gd php5-xmlrpc php5-curl php5-mysql php-pear phpmyadmin libapache2-mod-php5 git unzip
+wget https://github.com/OpenGamePanel/OGP-Website/archive/master.zip
+unzip master.zip
+}
+
+SDNS () {
+apt-get -q -y install bind9
+
+echo "options {
+        directory \"/var/cache/bind\";
+
+        // If there is a firewall between you and nameservers you want
+        // to talk to, you may need to fix the firewall to allow multiple
+        // ports to talk.  See http://www.kb.cert.org/vuls/id/800113
+
+        // If your ISP provided one or more IP addresses for stable
+        // nameservers, you probably want to use them as forwarders.
+        // Uncomment the following block, and insert the addresses replacing
+        // the all-0's placeholder.
+
+         forwarders {
+              $SPDNS;
+         };
+
+        //========================================================================
+        // If BIND logs error messages about the root key being expired,
+        // you will need to update your keys.  See https://www.isc.org/bind-keys
+        //========================================================================
+        dnssec-validation auto;
+
+        auth-nxdomain no;    # conform to RFC1035
+        listen-on-v6 { any; };
+};" > /etc/bind/named.conf.options
+    echo "domain $Domaine
+search $Domaine
+nameserver 127.0.0.1" > /etc/resolv.conf
+}
+
+#PPostFixConfig ()
+#{
+#    
+#}
+
+echo "BOOTLOGD_ENABLE=Yes" > /etc/default/bootlogd
+echo '# couleurs
+C_RED="\[\e[1;31m\]"
+C_BLUE="\[\e[1;34m\]"
+C_GRAY="\[\e[1;30m\]"
+C_WHITE="\[\e[1;37m\]"
+C_YELLOW="\[\e[1;33m\]"
+C_DEF="\[\033[0m\]"
+
+mUID=`id -u`
+MACHINE=`hostname -f`
+
+if [ "$mUID" = "0" ] ; then
+PS1="${C_RED}\u${C_DEF}@${C_RED}${MACHINE}${C_DEF}:\w${C_RED}#${C_DEF} "
+PS2="${C_RED}>${C_DEF} "
+else
+PS1="${C_BLUE}\u${C_DEF}@${MACHINE}:\w${C_BLUE}\$ ${C_DEF}"
+PS2="${C_BLUE}>${C_DEF} "
+fi
+
+export PS2
+export PS1
+
+case $TERM in
+xterm*)
+PROMPT_COMMAND=LOL93LOL33LOL10
+echo -ne "\033]0;${USER}@${MACHINE}: ${PWD}\007"
+;;
+*)
+setterm -blength 0
+;;
+esac' >> /etc/bash.bashrc
+sed -i "s/LOL93/'echo -ne /" /etc/bash.bashrc
+sed -i 's/LOL33/"\\033]0;${USER}@${MACHINE}: ${PWD}\\007"/' /etc/bash.bashrc
+sed -i "s/LOL10/'/" /etc/bash.bashrc
+
+echo "0" > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
+echo "net.ipv4.icmp_echo_ignore_broadcasts = 0" >> /etc/sysctl.conf
+
+if [ $typeM -eq 1 ]
+then
+    NomMachine="ProxMaster$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    InfoProxM
+    ProxGen
+    Admin
+    AutoMaj
+    SDNS
+    OpenVPNS
+    FireWProxM
+    LogWatch
+    HostProx
+    #NTPM
+    ClustM
+    MariaDB
+    LauchScript
+
+fi
+
+if [ $typeM -eq 2 ]
+then
+    NomMachine="ProxSlave$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    InfoProxS
+    ProxGen
+    Admin
+    AutoMaj
+    SDNS
+    FireWProxS
+    LogWatch
+    HostProx
+    #NTPS
+    OpenVPNC
+    OpenVPNCP
+    ClustS
+    MariaDB
+    LauchScript
+
+fi
+
+if [ $typeM -eq 3 ]
+then
+    NomMachine="Routeur$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    InfoRouteur
+    DebMini
+    MajSys
+    AutoMaj
+    Admin
+    FireWRout
+    HostDeb
+    NTPMa
+
+fi
+
+if [ $typeM -eq 4 ]
+then
+    NomMachine="Game$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    InfoDebS
+    DebMini
+    DebS
+    MajSys
+    AutoMaj
+    Admin
+    HostDeb
+    NTPMa
+    OpenVPNC
+    MariaDB
+    FireWDebS
+    LauchScript
+    OGP
+
+fi
+
+if [ $typeM -eq 5 ]
+then
+    NomMachine="Machine$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    InfoDebM
+    DebMini
+    DebB
+    MajSys
+    AutoMaj
+    Admin
+    HostDeb
+    DebB
+    NTPMa
+
+fi
+
+if [ $typeM -eq 6 ]
+then
+    NomMachine="Machine$NMachine"
+    MailE="$NomMachine@$Domaine"; #Mail de repérage de la machine
+    DebMini
+    DebS
+    MajSys
+    AutoMaj
+    Admin
+    HostDeb
+    NTPMa
+    OpenVPNC
+    MariaDB
+    LauchScript
+
+fi
+
+chmod o-x /usr/bin/make;
+chmod o-x /usr/bin/apt-get;
+chmod o-x /usr/bin/dpkg;
+
+cd
+rm -f $0;
+
+shutdown -r now;
