@@ -1751,7 +1751,7 @@ then
     ProxGen
     Admin
     AutoMaj
-    SDNS
+    #SDNS
     OpenVPNS
     FireWProxM
     LogWatch
@@ -1771,7 +1771,7 @@ then
     ProxGen
     Admin
     AutoMaj
-    SDNS
+    #SDNS
     FireWProxS
     LogWatch
     HostProx
