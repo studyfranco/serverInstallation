@@ -871,7 +871,7 @@ FireWDebS ()
 
 OpenVPNS()
 {
-apt-get -y -q install openvpn openssl bridge-utils libssl-dev liblzo2-2 liblzo2-dev;
+apt-get -y -q install openvpn openssl bridge-utils libssl-dev liblzo2-2 liblzo2-dev easy-rsa;
 mkdir /etc/openvpn/easy-rsa/;
 cp -r /usr/share/easy-rsa/* /etc/openvpn/easy-rsa/;
 chmod -R 700 /etc/openvpn/easy-rsa/;
