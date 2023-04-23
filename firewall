@@ -21,7 +21,8 @@ CHAINIPALLOW="z-allow-ips"
 CHAINOPENSATE="z-open-state"
 CHAINPORTSENTRYOPEN="z-port-sentry-open"
 CHAINPORTSENTRYCLOSE="z-port-sentry-close"
-declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINPORTSENTRYOPEN $CHAINPORTSENTRYCLOSE)
+CHAINPORTSENTRYCLOSEALLOWIP="z-port-sentry-close-allow-ips"
+declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINPORTSENTRYOPEN $CHAINPORTSENTRYCLOSE $CHAINPORTSENTRYCLOSEALLOWIP)
 mapfile -t IPBlock < /etc/init.d/firewall.block.ip
 declare -a IPBlock
 declare -a INTEROut=("eth0")
@@ -63,12 +64,14 @@ set_rules()
 	# Ajout des IPV4s autorisé
 	for IP in "${IPAutor[@]}"; do
 		$IPT -A $CHAINIPALLOW -s $IP -j ACCEPT &
+		$IPT -A $CHAINPORTSENTRYCLOSEALLOWIP -s $IP -j $CHAINPORTSENTRYCLOSE &
+		#$IPT6 -A $CHAINPORTSENTRYCLOSEALLOWIP -s $IP -j $CHAINPORTSENTRYCLOSE
 	done
 	# Creation des etats possibles
-	$IPT -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT
-	$IPT -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-	$IPT6 -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT
-	$IPT6 -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+	$IPT -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT &
+	$IPT -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &
+	$IPT6 -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT &
+	$IPT6 -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &
 	# On souhaite choisir quand ouvrir et fermer les ports de portsentry et son ultimate ban
 	for PORT in "${portSentryTCP[@]}"; do
 		$IPT -A $CHAINPORTSENTRYOPEN -p tcp --dport $PORT -j ACCEPT &
@@ -85,29 +88,30 @@ set_rules()
 
 	$IPT -A INPUT  -i lo -j ACCEPT
 	$IPT6 -A INPUT  -i lo -j ACCEPT
-        # On autorise les ips du reseau local mais il faut aussi ne pas les autoriser sur les ports de portsentry
+	# On autorise les ips du reseau local mais il faut aussi ne pas les autoriser sur les ports de portsentry
 	$IPT -A INPUT -s 10.0.0.0/24 -j $CHAINPORTSENTRYCLOSE
 	$IPT -A INPUT -s 192.168.0.0/24 -j $CHAINPORTSENTRYCLOSE
-        for zone in "${rulesZone[@]}"; do
-                $IPT -A $zone -s 10.0.0.0/24 -j ACCEPT
-                $IPT -A $zone -s 192.168.0.0/24 -j ACCEPT
-		# On autorise les connexions dont l état est RELATED ou ESTABLISHED
-		$IPT -A $zone -j $CHAINOPENSATE
-		$IPT6 -A $zone -j $CHAINOPENSATE 2> /dev/null
-        done
+	for zone in "${rulesZone[@]}"; do
+		$IPT -A $zone -s 10.0.0.0/24 -j ACCEPT
+		$IPT -A $zone -s 192.168.0.0/24 -j ACCEPT
+	done
 
 	# On autorise les connexions dont l état est RELATED ou ESTABLISHED
 	# L'ouverture complete se fait ici a utiliser avec precautions
+	echo "Réglages principaux des interfaces"
 	for zone in "${rulesZone[@]}"; do
+		# On autorise les connexions dont l état est RELATED ou ESTABLISHED
+		$IPT -A $zone -j $CHAINOPENSATE
+		$IPT6 -A $zone -j $CHAINOPENSATE 2> /dev/null
 		for ITER in "${INTEROut[@]}"; do
 			# On autorise nos IP mais il ne faut pas qu'elle puissent être ban par portsentry
-			$IPT -A $zone -i $ITER -j $CHAINPORTSENTRYCLOSE
-			$IPT6 -A $zone -i $ITER -j $CHAINPORTSENTRYCLOSE
+			$IPT -A $zone -i $ITER -j $CHAINPORTSENTRYCLOSEALLOWIP
+			$IPT6 -A $zone -i $ITER -j $CHAINPORTSENTRYCLOSEALLOWIP 2> /dev/null
 			$IPT -A $zone -i $ITER -j $CHAINIPALLOW
-			$IPT6 -A $zone -i $ITER -j $CHAINIPALLOW
+			$IPT6 -A $zone -i $ITER -j $CHAINIPALLOW 2> /dev/null
 			# Mais on bloque celles qu'on ne souhaite pas
 			$IPT -A $zone -i $ITER -j $CHAINIPBLOCK
-			$IPT6 -A $zone -i $ITER -j $CHAINIPBLOCK
+			$IPT6 -A $zone -i $ITER -j $CHAINIPBLOCK 2> /dev/null
 		done
 	done
 
@@ -115,12 +119,13 @@ set_rules()
 	$IPT -A INPUT -p tcp --dport 34212 -s 54.170.120.91 -j ACCEPT
 	$IPT -A INPUT -p tcp --dport 34212 -s 46.51.207.89 -j ACCEPT
 
+	echo "Ouverture des ports et protocoles de l'interface out"
 	for ITER in "${INTEROut[@]}"; do
-		$IPT -A OUTPUT -i $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
-		$IPT -A OUTPUT -i $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-		$IPT6 -A OUTPUT -i $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
-		$IPT6 -A OUTPUT -i $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 		echo "Create the rules for the $ITER"
+		$IPT -A OUTPUT -o $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+		$IPT -A OUTPUT -o $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
+		$IPT6 -A OUTPUT -o $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+		$IPT6 -A OUTPUT -o $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 
 		$IPT -A INPUT -i $ITER -j $CHAINPORTSENTRYOPEN
 		$IPT6 -A INPUT -i $ITER -j $CHAINPORTSENTRYOPEN
@@ -140,7 +145,7 @@ set_rules()
 
 		for PORT in "${openPortTCP[@]}"; do
 			$IPT -A INPUT -i $ITER -p tcp --dport $PORT -m geoip --src-cc $countryOpenPort -j ACCEPT
-                        $IPT -A INPUT -i $ITER -p tcp --dport $PORT -m geoip ! --src-cc $countryOpenPort -j DROP
+			$IPT -A INPUT -i $ITER -p tcp --dport $PORT -m geoip ! --src-cc $countryOpenPort -j DROP
 			$IPT6 -A INPUT -i $ITER -p tcp --dport $PORT -m geoip --src-cc $countryOpenPort -j ACCEPT
 			$IPT6 -A INPUT -i $ITER -p tcp --dport $PORT -m geoip ! --src-cc $countryOpenPort -j DROP
 		done
@@ -156,7 +161,7 @@ set_rules()
 	$IPT -A INPUT -p icmp --src-cc $countryOpenPort -j ACCEPT
 	$IPT6 -A INPUT -p ipv6-icmp --src-cc $countryOpenPort -j ACCEPT
 
-	# On ouvre les ports des docker
+	echo "On ouvre les ports des containers docker"
 	for PORT in "${openPortDockerTCP[@]}"; do
 		$IPT -A "DOCKER" -p tcp --dport $PORT -j ACCEPT
 		$IPT6 -A "DOCKER" -p tcp --dport $PORT -j ACCEPT 2> /dev/null
@@ -165,7 +170,7 @@ set_rules()
 	if (( ${#interfaceToGoOutSide[@]} )); then
 		$IPT -t nat -A POSTROUTING -o $mainInter -j MASQUERADE
 		$IPT6 -t nat -A POSTROUTING -o $mainInter -j MASQUERADE
-	done
+	fi
 	for INTER in "${interfaceToGoOutSide[@]}"; do
 		$IPT -A INPUT -i $INTER -j $CHAINPORTSENTRYCLOSE
 		$IPT6 -A INPUT -i $INTER -j $CHAINPORTSENTRYCLOSE
@@ -185,11 +190,12 @@ set_rules()
 		$IPT6 -A FORWARD -i $INTER -o docker0 -j ACCEPT
 	done
 
-	# On drop tout le reste du traffic
-	for INTER in "${INTEROut[@]}"; do
-		$IPT -A INPUT -j DROP
-		$IPT6 -A INPUT -j DROP
-	done
+	echo "On drop tout le reste du traffic"
+	#for INTER in "${INTEROut[@]}"; do
+	#done
+	$IPT -A INPUT -j DROP
+	$IPT6 -A INPUT -j DROP
+
 
 	# On remove les route deny. Ce qui evite des problèmes
 	for IP in "${IPAutor[@]}"; do
