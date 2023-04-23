@@ -194,11 +194,16 @@ set_rules()
 	# On remove les route deny. Ce qui evite des problèmes
 	for IP in "${IPAutor[@]}"; do
 		$ROUTE -n del $IP reject 2> /dev/null &
-		$SED -i "/^ALL: $IP : DENY$/d" "/etc/hosts.deny" &
+		$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
+		$SED -i "/${IP}/d" /etc/init.d/firewall.block.ip &
+		#/usr/bin/fail2ban-client set ssh unbanip ${IP} 2> /dev/null &
+		#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
 	done
 	for IP in "${IPBlock[@]}"; do
 		$ROUTE -n del $IP reject 2> /dev/null &
-		$SED -i "/^ALL: $IP : DENY$/d" "/etc/hosts.deny" &
+		$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
+		#/usr/bin/fail2ban-client set ssh unbanip ${IP} 2> /dev/null &
+		#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
 	done
 	wait
 
