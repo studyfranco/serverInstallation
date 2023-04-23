@@ -21,7 +21,7 @@ CHAINIPALLOW="z-allow-ips"
 CHAINOPENSATE="z-open-state"
 CHAINPORTSENTRYOPEN="z-port-sentry-open"
 CHAINPORTSENTRYCLOSE="z-port-sentry-close"
-CHAINPORTSENTRYCLOSEALLOWIP="z-port-sentry-close-allow-ips"
+CHAINPORTSENTRYCLOSEALLOWIP="z-no-portsentry-allow-ips"
 declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINPORTSENTRYOPEN $CHAINPORTSENTRYCLOSE $CHAINPORTSENTRYCLOSEALLOWIP)
 mapfile -t IPBlock < /etc/init.d/firewall.block.ip
 declare -a IPBlock
@@ -158,8 +158,8 @@ set_rules()
 	done
 
 	echo "On accepte toute les requetes ICMP des pays souhaités"
-	$IPT -A INPUT -p icmp --src-cc $countryOpenPort -j ACCEPT
-	$IPT6 -A INPUT -p ipv6-icmp --src-cc $countryOpenPort -j ACCEPT
+	$IPT -A INPUT -p icmp -j ACCEPT #--src-cc $countryOpenPort
+	$IPT6 -A INPUT -p ipv6-icmp -j ACCEPT #--src-cc $countryOpenPort
 
 	echo "On ouvre les ports des containers docker"
 	for PORT in "${openPortDockerTCP[@]}"; do
@@ -195,7 +195,6 @@ set_rules()
 	#done
 	$IPT -A INPUT -j DROP
 	$IPT6 -A INPUT -j DROP
-
 
 	# On remove les route deny. Ce qui evite des problèmes
 	for IP in "${IPAutor[@]}"; do
