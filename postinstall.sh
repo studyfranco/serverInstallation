@@ -42,12 +42,12 @@ echo "0 3 * * * /etc/init.d/firewall restart" >> /tmp/mycron
 crontab /tmp/mycron
 rm /tmp/mycron
 
+apt-get install -y linux-headers-$(uname -r)
 apt-get install -y cron-apt
 echo "autoclean -y
 dist-upgrade -y -o APT::Get::Show-Upgraded=true" > /etc/cron-apt/action.d/3-download
 
-apt-get install -y software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl --no-install-recommends
-perl -MCPAN -e'install Text::CSV_XS'
+apt-get install -y software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl --no-install-recommends
 /usr/libexec/xtables-addons/xt_geoip_dl
 mkdir -p /usr/share/xt_geoip
 /usr/libexec/xtables-addons/xt_geoip_build -D /usr/share/xt_geoip *.csv
