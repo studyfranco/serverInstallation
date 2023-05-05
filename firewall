@@ -19,15 +19,19 @@ declare -a IPAutor=()
 CHAINIPBLOCK="z-block-ips"
 CHAINIPALLOW="z-allow-ips"
 CHAINOPENSATE="z-open-state"
+CHAINOPENLOCALPORT="z-open-local-port"
 CHAINPORTSENTRYOPEN="z-port-sentry-open"
 CHAINPORTSENTRYCLOSE="z-port-sentry-close"
 CHAINPORTSENTRYCLOSEALLOWIP="z-no-portsentry-allow-ips"
-declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINPORTSENTRYOPEN $CHAINPORTSENTRYCLOSE $CHAINPORTSENTRYCLOSEALLOWIP)
+declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINOPENLOCALPORT $CHAINPORTSENTRYOPEN $CHAINPORTSENTRYCLOSE $CHAINPORTSENTRYCLOSEALLOWIP)
 mapfile -t IPBlock < /etc/init.d/firewall.block.ip
 declare -a IPBlock
 declare -a INTEROut=("eth0")
 declare -a interfaceToGoOutSide=()
 declare -a rulesZone=("INPUT" "DOCKER")
+declare -a localIPs=()
+declare -a localOpenPortsTCP=()
+declare -a localOpenPortsUDP=()
 # Comprends aussi les ports dockers exterieur
 declare -a openPortTCP=("22")
 declare -a openPortUDP=()
@@ -67,6 +71,22 @@ set_rules()
 		$IPT -A $CHAINPORTSENTRYCLOSEALLOWIP -s $IP -j $CHAINPORTSENTRYCLOSE &
 		#$IPT6 -A $CHAINPORTSENTRYCLOSEALLOWIP -s $IP -j $CHAINPORTSENTRYCLOSE
 	done
+	for PORT in "${localOpenPortsTCP[@]}"; do
+		$IPT -A $CHAINOPENLOCALPORT -p tcp --dport $PORT -j ACCEPT &
+		$IPT6 -A $CHAINOPENLOCALPORT -p tcp --dport $PORT -j ACCEPT &
+	done
+	for PORT in "${openPortTCP[@]}"; do
+		$IPT -A $CHAINOPENLOCALPORT -p tcp --dport $PORT -j ACCEPT &
+		$IPT6 -A $CHAINOPENLOCALPORT -p tcp --dport $PORT -j ACCEPT &
+	done
+	for PORT in "${localOpenPortsUDP[@]}"; do
+		$IPT -A $CHAINOPENLOCALPORT -p udp --dport $PORT -j ACCEPT &
+		$IPT6 -A $CHAINOPENLOCALPORT -p udp --dport $PORT -j ACCEPT &
+	done
+	for PORT in "${openPortUDP[@]}"; do
+		$IPT -A $CHAINOPENLOCALPORT -p udp --dport $PORT -j ACCEPT &
+		$IPT6 -A $CHAINOPENLOCALPORT -p udp --dport $PORT -j ACCEPT &
+	done
 	# Creation des etats possibles
 	$IPT -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT &
 	$IPT -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &
@@ -89,12 +109,12 @@ set_rules()
 	$IPT -A INPUT  -i lo -j ACCEPT
 	$IPT6 -A INPUT  -i lo -j ACCEPT
 	# On autorise les ips du reseau local mais il faut aussi ne pas les autoriser sur les ports de portsentry
-	$IPT -A INPUT -s 10.0.0.0/24 -j $CHAINPORTSENTRYCLOSE
-	$IPT -A INPUT -s 192.168.0.0/24 -j $CHAINPORTSENTRYCLOSE
-	for zone in "${rulesZone[@]}"; do
-		$IPT -A $zone -s 10.0.0.0/24 -j ACCEPT
-		$IPT -A $zone -s 192.168.0.0/24 -j ACCEPT
-	done
+	#$IPT -A INPUT -s 10.0.0.0/24 -j $CHAINPORTSENTRYCLOSE
+	#$IPT -A INPUT -s 192.168.0.0/24 -j $CHAINPORTSENTRYCLOSE
+	#for zone in "${rulesZone[@]}"; do
+	#	$IPT -A $zone -s 10.0.0.0/24 -j ACCEPT
+	#	$IPT -A $zone -s 192.168.0.0/24 -j ACCEPT
+	#done
 
 	# On autorise les connexions dont l état est RELATED ou ESTABLISHED
 	# L'ouverture complete se fait ici a utiliser avec precautions
@@ -116,19 +136,25 @@ set_rules()
 	done
 
 	# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
-	$IPT -A INPUT -p tcp --dport 34212 -s 54.170.120.91 -j ACCEPT
-	$IPT -A INPUT -p tcp --dport 34212 -s 46.51.207.89 -j ACCEPT
+	#$IPT -A INPUT -p tcp --dport 34212 -s 54.170.120.91 -j ACCEPT
+	#$IPT -A INPUT -p tcp --dport 34212 -s 46.51.207.89 -j ACCEPT
+	$IPT -A INPUT -m set --match-set crowdsec-blacklists src -j DROP
+	$IPT6 -A INPUT -m set --match-set crowdsec6-blacklists src -j DROP
 
 	echo "Ouverture des ports et protocoles de l'interface out"
 	for ITER in "${INTEROut[@]}"; do
 		echo "Create the rules for the $ITER"
+		for IP in "${localIPs[@]}"; do
+			$IPT -A INPUT -i $ITER -s $IP -j $CHAINOPENLOCALPORT
+			#$IPT6 -A INPUT -i $ITER -s $IP -j $CHAINOPENLOCALPORT
+		done
 		$IPT -A OUTPUT -o $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
 		$IPT -A OUTPUT -o $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 		$IPT6 -A OUTPUT -o $ITER -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
 		$IPT6 -A OUTPUT -o $ITER -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 
 		$IPT -A INPUT -i $ITER -j $CHAINPORTSENTRYOPEN
-		$IPT6 -A INPUT -i $ITER -j $CHAINPORTSENTRYOPEN
+		#$IPT6 -A INPUT -i $ITER -j $CHAINPORTSENTRYOPEN
 		for PORT in "${WWopenPortTCP[@]}"; do
 			$IPT -A INPUT -i $ITER -p tcp --dport $PORT -j ACCEPT
 			$IPT6 -A INPUT -i $ITER -p tcp --dport $PORT -j ACCEPT
@@ -191,8 +217,6 @@ set_rules()
 	done
 
 	echo "On drop tout le reste du traffic"
-	#for INTER in "${INTEROut[@]}"; do
-	#done
 	$IPT -A INPUT -j DROP
 	$IPT6 -A INPUT -j DROP
 
@@ -201,13 +225,13 @@ set_rules()
 		$ROUTE -n del $IP reject 2> /dev/null &
 		$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
 		$SED -i "/${IP}/d" /etc/init.d/firewall.block.ip &
-		#/usr/bin/fail2ban-client set ssh unbanip ${IP} 2> /dev/null &
+		#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
 		#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
 	done
 	for IP in "${IPBlock[@]}"; do
 		$ROUTE -n del $IP reject 2> /dev/null &
 		$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
-		#/usr/bin/fail2ban-client set ssh unbanip ${IP} 2> /dev/null &
+		#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
 		#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
 	done
 	wait
