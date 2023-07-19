@@ -1,7 +1,7 @@
 #! /bin/bash
 apt-get update
 apt-get dist-upgrade -y
-apt-get install -y htop iotop bash-completion pigz fail2ban apt-transport-https ca-certificates curl wget gnupg gnupg2 git rsync portsentry
+apt-get install -y htop iotop bash-completion pigz fail2ban apt-transport-https ca-certificates curl wget gnupg gnupg2 git rsync portsentry dsniff
 
 echo "[sshd]
 enabled = true
