@@ -4,24 +4,41 @@ IPT6=/sbin/ip6tables
 IPS=/sbin/ipset
 ROUTE=/sbin/route
 SED=/bin/sed
+DUMPCO=/bin/ss
+DOCKER=/bin/docker
 
 IPSLISTBADIP="bad_ip"
 IPSLISTGOODIP="good_ip"
-IPSLOCALIPS="local_ip"
+IPSLOCALIPS="l"
+IPSINTERNALIPS="i"
 IPSPLEXIPS="plex_ip"
+IPS6BASIC="ipv6_cast"
+IPSDOH="doh_serv"
 
 mainInter="eth0"
-declare -a INTEROut=("eth0")
-declare -a interfaceToGoOutSide=("virbr1,192.168.100.0/24,fe80:1::/64")
-declare -a internInterfaceHaveAccessAsLocal=("virbr1,192.168.100.0/24,fe80:1::/64")
-declare -a interfaceWithDHCP=( ["virbr1"]=1 )
+declare -a INTEROut=("eth0;192.168.0.0/24;fc00::/64")
+declare -a interfaceToGoOutSide=("virbr1;192.168.100.0/24;fe80:1::/64")
+declare -a internInterfaceHaveAccessAsLocal=("virbr1;192.168.100.0/24;fe80:1::/64")
+declare -A interfaceWithDHCP=( ["virbr1;192.168.100.0/24;fe80:1::/64"]=1 )
 
 # List of trusted IPs
 declare -a IPAutor=()
+declare -a IPAutorDnatPortTCP=()
+declare -a IPAutorDnatPortUDP=()
+declare -a IPAutorDockerTCP=()
+declare -a IPAutorDockerUDP=()
 
-declare -a localIPs=("192.168.0.0/24")
-declare -a localOpenPortsTCP=("22" "53" "139" "445" "8181")
-declare -a localOpenPortsUDP=("53")
+declare -a internalOpenPortsTCP=()
+declare -a internalOpenPortsUDP=()
+declare -a internalRedirectPortTCP=()
+declare -a internalRedirectPortUDP=()
+declare -a internalDnatPortTCP=()
+declare -a internalDnatPortUDP=()
+declare -a internalDockerTCP=()
+declare -a internalDockerUDP=()
+
+declare -a localOpenPortsTCP=("22" "139" "445" "8181")
+declare -a localOpenPortsUDP=()
 declare -a localRedirectPortTCP=()
 declare -a localRedirectPortUDP=()
 declare -a localDnatPortTCP=()
@@ -30,8 +47,8 @@ declare -a localDockerTCP=()
 declare -a localDockerUDP=()
 
 declare -a countryOpenPort="FR,DE"
-declare -a openPortTCP=("14142" "22668" "7349" "7778" "7779" "25575")
-declare -a openPortUDP=("7777" "15000" "15777" "7778" "7779" "27015")
+declare -a openPortTCP=("53" "14142" "22668" "7349" "7778" "7779" "25575")
+declare -a openPortUDP=("53" "7777" "15000" "15777" "7778" "7779" "27015")
 declare -a redirectPortTCP=("47890,8096" "47893,5055" "34212,32400")
 declare -a redirectPortUDP=()
 declare -a dnatPortTCP=()
@@ -49,4 +66,4 @@ declare -a WWDockerTCP=()
 declare -a WWDockerUDP=()
 
 declare -a blockedCountry="AE,BW,BY,BZ,CN,EG,HK,IL,JP,KR,KP,RU,SG,TN"
-declare -a blockedCountry2="IN,TW,UA,US"
+declare -a blockedCountry2="UA,US"

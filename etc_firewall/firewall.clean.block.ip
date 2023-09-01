@@ -1,0 +1,29 @@
+#! /bin/bash
+
+source /etc/firewall/firewall.settings
+# On remove les route deny. Ce qui evite des problèmes
+for IP in "${IPAutor[@]}"; do
+	$ROUTE -n del $IP reject 2> /dev/null &
+	$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
+	#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
+	#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
+done
+
+mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+declare -a IPBlock
+for IP in "${IPBlock[@]}"; do
+	$ROUTE -n del $IP reject 2> /dev/null &
+	$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
+	#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
+	#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
+done
+
+cscli hub update
+
+cscli collections upgrade crowdsecurity/base-http-scenarios LePresidente/jellyseerr LePresidente/jellyfin crowdsecurity/iptables crowdsecurity/http-cve crowdsecurity/mariadb crowdsecurity/linux-lpe crowdsecurity/linux \
+crowdsecurity/nginx-proxy-manager crowdsecurity/nginx crowdsecurity/modsecurity crowdsecurity/pgsql crowdsecurity/sshd schiz0phr3ne/sonarr crowdsecurity/smb schiz0phr3ne/radarr schiz0phr3ne/prowlarr crowdsecurity/suricata mstilkerich/bind9
+cscli scenarios upgrade LePresidente/ssh-bad-keyexchange-bf
+
+systemctl reload crowdsec
+
+wait

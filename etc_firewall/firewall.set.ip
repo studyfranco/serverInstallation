@@ -2,35 +2,82 @@
 
 source /etc/firewall/firewall.settings
 
-$IPS destroy $IPSLOCALIPS 2> /dev/null
-$IPS destroy ${IPSLOCALIPS}6 2> /dev/null
-$IPS create $IPSLOCALIPS hash:ip maxelem 999999999 2> /dev/null
-$IPS create ${IPSLOCALIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
-$IPS destroy $IPSLISTGOODIP 2> /dev/null
-$IPS destroy ${IPSLISTGOODIP}6 2> /dev/null
-$IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null
-$IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
-$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null
-$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
-$IPS destroy $IPSPLEXIPS 2> /dev/null
-$IPS destroy ${IPSPLEXIPS}6 2> /dev/null
-$IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null
-$IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
+add_doh()
+{
+	$IPS add $IPSDOH 8.8.4.4,443 &
+	$IPS add $IPSDOH 8.8.8.8,443 &
+	$IPS add $IPSDOH 149.112.112.112,443 &
+	$IPS add $IPSDOH 9.9.9.9,443 &
+	$IPS add $IPSDOH 149.112.112.9,443 &
+	$IPS add $IPSDOH 9.9.9.10,443 &
+	$IPS add $IPSDOH 149.112.112.10,443 &
+	$IPS add $IPSDOH 9.9.9.11,443 &
+	$IPS add $IPSDOH 149.112.112.11,443 &
+	$IPS add $IPSDOH 104.28.1.106,443 &
+	$IPS add $IPSDOH 104.28.0.106,443 &
+	$IPS add $IPSDOH 45.90.28.0,443 &
+	$IPS add $IPSDOH 45.90.30.0,443 &
+	$IPS add $IPSDOH 176.103.130.131,443 &
+	$IPS add $IPSDOH 176.103.130.130,443 &
+	$IPS add $IPSDOH 176.103.130.132,443 &
+	$IPS add $IPSDOH 176.103.130.134,443 &
+	$IPS add $IPSDOH 96.113.151.147,443 &
+	$IPS add $IPSDOH 185.228.168.9,443 &
+	$IPS add $IPSDOH 185.228.169.9,443 &
+	$IPS add $IPSDOH 185.228.168.168,443 &
+	$IPS add $IPSDOH 185.228.169.168,443 &
+	$IPS add $IPSDOH 185.228.168.10,443 &
+	$IPS add $IPSDOH 185.228.169.11,443 &
+	
+	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/ipv6list.txt | while read -r line
+	do
+	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
+	  if [[ ! $line =~ ^\# ]]; then
+		# Vérifie si la ligne contient une adresse IPv6
+		if [[ $line =~ ^[0-9a-fA-F\:]+$ ]]; then
+		  # Ajoute l'adresse IPv6 au tableau
+		  $IPS add ${IPSDOH}6 ${line},443 &
+		fi
+	  fi
+	done
+}
 
+{ $IPS destroy $IPSLISTGOODIP 2> /dev/null; $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; } & pid3=$!
+{ $IPS destroy ${IPSLISTGOODIP}6 2> /dev/null; $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid4=$!
+
+{ $IPS destroy $IPSPLEXIPS 2> /dev/null; $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; } & pid5=$!
+{ $IPS destroy ${IPSPLEXIPS}6 2> /dev/null; $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid6=$!
+
+{ $IPS destroy ${IPS6BASIC} 2> /dev/null; $IPS create ${IPS6BASIC} hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid1=$!
+
+$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid7=$!
+$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid8=$!
+
+$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null & pid9=$!
+$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null & pid10=$!
+
+wait $pid3
 # Ajout des IPV4s autorisé
 for IP in "${IPAutor[@]}"; do
 	$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
 done
-for IP in "${localIPs[@]}"; do
-	$IPS add $IPSLOCALIPS $IP 2> /dev/null &
-done
+
+wait $pid5
 # Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
 $IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
 $IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &
+
+wait $pid9
+$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+
+wait $pid9 $pid10
+add_doh &
+
 # Creation d'un groupe pour les IPV4s Bloques
 mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 declare -a IPBlock
+wait $pid7
 for IP in "${IPBlock[@]}"; do
-	$IPS add $IPSLISTBADIP $IP 2> /dev/null &
+	$IPS add $IPSLISTBADIP $IP 2> /dev/null && $DUMPCO -k src $IP > /dev/null 2>&1 && $DUMPCO -k dst $IP > /dev/null 2>&1 &
 done
 wait
