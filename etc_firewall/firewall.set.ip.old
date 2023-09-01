@@ -1,0 +1,40 @@
+#! /bin/bash
+
+source /etc/firewall/firewall.settings
+
+{ $IPS destroy $IPSLISTGOODIP 2> /dev/null; $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; } & pid3=$!
+{ $IPS destroy ${IPSLISTGOODIP}6 2> /dev/null; $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid4=$!
+
+{ $IPS destroy $IPSLOCALIPS 2> /dev/null; $IPS create $IPSLOCALIPS hash:ip maxelem 999999999 2> /dev/null; } & pid1=$!
+{ $IPS destroy ${IPSLOCALIPS}6 2> /dev/null; $IPS create ${IPSLOCALIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid2=$!
+
+{ $IPS destroy $IPSPLEXIPS 2> /dev/null; $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; } & pid5=$!
+{ $IPS destroy ${IPSPLEXIPS}6 2> /dev/null; $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid6=$!
+
+$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid7=$!
+$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid8=$!
+
+wait $pid3
+# Ajout des IPV4s autorisé
+for IP in "${IPAutor[@]}"; do
+	$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+done
+
+wait $pid1
+for IP in "${localIPs[@]}"; do
+	$IPS add $IPSLOCALIPS $IP 2> /dev/null &
+done
+
+wait $pid5
+# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
+$IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
+$IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &
+
+# Creation d'un groupe pour les IPV4s Bloques
+mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+declare -a IPBlock
+wait $pid7
+for IP in "${IPBlock[@]}"; do
+	$IPS add $IPSLISTBADIP $IP 2> /dev/null &
+done
+wait
