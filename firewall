@@ -355,11 +355,14 @@ set_rules()
 		$IPT6 -A "DOCKER" -p tcp --dport $PORT -j ACCEPT 2> /dev/null
 	done
 
-	if (( ${#interfaceToGoOutSide[@]} )); then
-		$IPT -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
-		$IPT6 -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
-	fi
+	#if (( ${#interfaceToGoOutSide[@]} )); then
+	#	$IPT -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
+	#	$IPT6 -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
+	#fi
 	for INTER in "${interfaceToGoOutSide[@]}"; do
+		$IPT -t nat -A POSTROUTING -i $INTER -o $mainInter -j MASQUERADE &
+		$IPT6 -t nat -A POSTROUTING -i $INTER -o $mainInter -j MASQUERADE &
+
 		$IPT -A INPUT -i $INTER -j $CHAINIPALLOW
 		$IPT6 -A INPUT -i $INTER -j $CHAINIPALLOW
 
@@ -409,6 +412,8 @@ flush_rules()
 		$IPT6 -D FORWARD -i $INTER -o docker0 -j ACCEPT 2> /dev/null
 	done
 	for INTER in "${interfaceToGoOutSide[@]}"; do
+		$IPT -t nat -D POSTROUTING -i $INTER -o $mainInter -j MASQUERADE 2> /dev/null
+		$IPT6 -t nat -D POSTROUTING -i $INTER -o $mainInter -j MASQUERADE 2> /dev/null
 		$IPT -D FORWARD -i $INTER -o $mainInter -j ACCEPT 2> /dev/null
 		$IPT -D FORWARD -i $mainInter -o $INTER -m state --state ESTABLISHED,RELATED -j ACCEPT 2> /dev/null
 		$IPT6 -D FORWARD -i $INTER -o $mainInter -j ACCEPT 2> /dev/null
