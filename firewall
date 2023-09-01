@@ -1,30 +1,35 @@
 #! /bin/bash
 ### BEGIN INIT INFO
 # Provides:          firewall
-# Required-Start:    $all
+# Required-Start:    $local_fs $remote_fs $syslog
 # Required-Stop:     $local_fs $remote_fs
-# Should-Stop:       $network $syslog
+# Should-Start:      iptables
+# Should-Stop:       iptables
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Start/stop firewall
 # Description:       Start/stop firewall, a script to set/unset your custom fir
 ### END INIT INFO
 
-CHAINIPBLOCK="z-block-ips"
 CHAINIPALLOW="z-allow-ips"
+CHAINIPALLOWTCP="z-allow-ips-tcp"
+CHAINIPALLOWUDP="z-allow-ips-udp"
+
 CHAINOPENSATE="z-open-state"
 CHAINDROPLOG="z-drop-packets"
+CHAINDROPLOGSELECTOR="z-drop-packets-logger-trash"
 
 CHAINOPENTCP="z-open-port-tcp"
 CHAINOPENUDP="z-open-port-udp"
 
 CHAINOPENLOCALPORTTCP="z-open-local-port-tcp"
-CHAINOPENWWPORTTCP="z-open-ww-port-tcp"
-CHAINOPENCRPORTTCP="z-open-cr-port-tcp"
-
 CHAINOPENLOCALPORTUDP="z-open-local-port-udp"
-CHAINOPENWWPORTUDP="z-open-ww-port-udp"
+
+CHAINOPENCRPORTTCP="z-open-cr-port-tcp"
 CHAINOPENCRPORTUDP="z-open-cr-port-udp"
+
+CHAINOPENWWPORTTCP="z-open-ww-port-tcp"
+CHAINOPENWWPORTUDP="z-open-ww-port-udp"
 
 CHAINPORTSENTRYOPENTCP="z-port-sentry-open-tcp"
 CHAINPORTSENTRYOPENUDP="z-port-sentry-open-udp"
@@ -33,364 +38,332 @@ CHAINPORTSENTRYCLOSEUDP="z-port-sentry-close-udp"
 CHAINPORTSENTRYLOG="z-port-sentry-log"
 
 CHAINOUTTRAFIC="z-output-rules"
-declare -a SPECIALCHAINLIST=($CHAINIPBLOCK $CHAINIPALLOW $CHAINOPENSATE $CHAINDROPLOG
+CHAINOUTTRAFICLOG="z-output-rules-log"
+CHAINICMPTRAFIC="z-icmp"
+
+CHAINMAINOUTINTER="z-main-out"
+CHAINMAININTINTER="z-main-internal"
+
+CHAINMAINOUTINTERICMP="z-main-out-icmp"
+CHAINMAININTINTERICMP="z-main-internal-icmp"
+
+CHAINMAININTINTERTCP="z-main-internal-tcp"
+CHAINMAININTINTERUDP="z-main-internal-udp"
+
+declare -a SPECIALCHAINLIST=($CHAINIPALLOW $CHAINOPENSATE $CHAINMAINOUTINTER $CHAINMAININTINTER $CHAINMAINOUTINTERICMP $CHAINMAININTINTERICMP $CHAINMAININTINTERTCP $CHAINMAININTINTERUDP 
 				$CHAINOPENTCP $CHAINOPENUDP $CHAINOPENLOCALPORTTCP $CHAINOPENWWPORTTCP $CHAINOPENCRPORTTCP $CHAINOPENLOCALPORTUDP $CHAINOPENWWPORTUDP $CHAINOPENCRPORTUDP
 				$CHAINPORTSENTRYOPENTCP $CHAINPORTSENTRYOPENUDP $CHAINPORTSENTRYCLOSETCP $CHAINPORTSENTRYCLOSEUDP $CHAINPORTSENTRYLOG
-				$CHAINOUTTRAFIC)
+				$CHAINOUTTRAFIC $CHAINOUTTRAFICLOG $CHAINDROPLOG $CHAINDROPLOGSELECTOR)
 
 CHAINPATLOCALTCP="z-redirect-local-tcp"
 CHAINPATLOCALUDP="z-redirect-local-udp"
+
 CHAINPATCRTCP="z-redirect-cr-tcp"
 CHAINPATCRUDP="z-redirect-cr-udp"
+
 CHAINPATWWTCP="z-redirect-ww-tcp"
 CHAINPATWWUDP="z-redirect-ww-udp"
+
 CHAINPATTCP="z-redirect-tcp"
 CHAINPATUDP="z-redirect-udp"
+
 CHAINPATMAIN="z-redirect-main"
-declare -a NATCHAINLIST=($CHAINPATMAIN $CHAINIPALLOW $CHAINPATTCP $CHAINPATUDP $CHAINPATLOCALTCP $CHAINPATLOCALUDP $CHAINPATCRTCP $CHAINPATCRUDP $CHAINPATWWTCP $CHAINPATWWUDP)
+declare -a NATCHAINLIST=($CHAINPATMAIN $CHAINMAINOUTINTER $CHAINMAININTINTER $CHAINIPALLOW $CHAINIPALLOWTCP $CHAINIPALLOWUDP $CHAINPATTCP $CHAINPATUDP $CHAINPATLOCALTCP $CHAINPATLOCALUDP $CHAINPATCRTCP $CHAINPATCRUDP $CHAINPATWWTCP $CHAINPATWWUDP)
+
+CHAINFORWARDFILTER="FORWARD-TRAFIC-FILTER"
+CHAINFORWARDTRAFIC="FORWARD-TRAFIC"
+
+CHAINPOSTROUTINGNAT="NAT-TRAFIC"
 
 source /etc/firewall/firewall.settings
 #
 # Function that set the firewall rules
 #
 set_rules()
-{
-	/bin/bash /etc/firewall/firewall.clean.block.ip &
-	/bin/bash /etc/firewall/firewall.set.ip &
-	# On réinitialise le firewall
-	flush_rules
+{	
+	echo "Réglages principaux des interfaces"
+	insert_rules "-A INPUT -i lo -j ACCEPT" && insert_rules "-P INPUT DROP" && insert_rules "-P FORWARD DROP" &
+	
+	insert_rules "-t raw -N $CHAINICMPTRAFIC" && \
+		$IPT -t raw -A PREROUTING -p icmp -j $CHAINICMPTRAFIC && \
+		$IPT -t raw -A $CHAINICMPTRAFIC -p icmp -m u32 ! --u32 "4&0x3FFF=0" -j DROP && \
+		$IPT -t raw -A $CHAINICMPTRAFIC -p icmp -m length --length 1492:65535 -j DROP &
 
-	read -a portSentryTCP <<< `grep -m 1 "^TCP_PORTS" /etc/portsentry/portsentry.conf | sed 's/TCP_PORTS=//' | sed 's/"//g' | tr ',' ' '`
-	read -a portSentryUDP <<< `grep -m 1 "^UDP_PORTS" /etc/portsentry/portsentry.conf | sed 's/UDP_PORTS=//' | sed 's/"//g' | tr ',' ' '`
 	for chain in "${SPECIALCHAINLIST[@]}"; do
-		$IPT -N $chain
-		$IPT6 -N $chain
-	done
-
-	for chain in "${NATCHAINLIST[@]}"; do
-		$IPT -t nat -N $chain
-		$IPT6 -t nat -N $chain
-	done
-	$IPT -t nat -A PREROUTING -j $CHAINPATMAIN &
-	$IPT6 -t nat -A PREROUTING -j $CHAINPATMAIN &
-
-	$IPT -A $CHAINIPALLOW -p tcp -j $CHAINPORTSENTRYCLOSETCP
-	$IPT -A $CHAINIPALLOW -p udp -j $CHAINPORTSENTRYCLOSEUDP
-	$IPT -A $CHAINIPALLOW -j ACCEPT &
-	$IPT6 -A $CHAINIPALLOW -p tcp -j $CHAINPORTSENTRYCLOSETCP
-	$IPT6 -A $CHAINIPALLOW -p udp -j $CHAINPORTSENTRYCLOSEUDP
-	$IPT6 -A $CHAINIPALLOW -j ACCEPT &
-
-	for PORT in "${localOpenPortsTCP[@]}"; do
-		$IPT -A $CHAINOPENLOCALPORTTCP -p tcp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTTCP -p tcp --dport $PORT -j ACCEPT &
-	done
-
-	for PORT in "${localOpenPortsUDP[@]}"; do
-		$IPT -A $CHAINOPENLOCALPORTUDP -p udp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTUDP -p udp --dport $PORT -j ACCEPT &
-	done
-
-	for PORT in "${openPortTCP[@]}"; do
-		$IPT -A $CHAINOPENLOCALPORTTCP -p tcp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTTCP -p tcp --dport $PORT -j ACCEPT &
-		$IPT -A $CHAINOPENCRPORTTCP -p tcp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENCRPORTTCP -p tcp --dport $PORT -j ACCEPT &
-	done
-
-	for PORT in "${openPortUDP[@]}"; do
-		$IPT -A $CHAINOPENLOCALPORTUDP -p udp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTUDP -p udp --dport $PORT -j ACCEPT &
-		$IPT -A $CHAINOPENCRPORTUDP -p udp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENCRPORTUDP -p udp --dport $PORT -j ACCEPT &
-	done
-
-	for PORT in "${WWopenPortTCP[@]}"; do
-		$IPT -A $CHAINOPENWWPORTTCP -p tcp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENWWPORTTCP -p tcp --dport $PORT -j ACCEPT &
-	done
-
-	for PORT in "${WWopenPortUDP[@]}"; do
-		$IPT -A $CHAINOPENWWPORTUDP -p udp --dport $PORT -j ACCEPT &
-		$IPT6 -A $CHAINOPENWWPORTUDP -p udp --dport $PORT -j ACCEPT &
+		insert_rules "-N $chain"
 	done
 
 	# Creation des etats possibles
-	$IPT -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT &
-	$IPT -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &
-	$IPT6 -A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT &
-	$IPT6 -A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT &
+	insert_rules "-A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT" &
+	insert_rules "-A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" &
+	# On autorise les connexions dont l état est RELATED ou ESTABLISHED des packets
+	insert_rules "-I INPUT 2 -j $CHAINOPENSATE" &
 
-	# On doit aussi le configurer pour les ip allow
-	$IPT -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATLOCALTCP &
-	$IPT -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATLOCALUDP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATLOCALTCP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATLOCALUDP &
-
-	$IPT -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATCRTCP &
-	$IPT -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATCRUDP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATCRTCP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATCRUDP &
-
-	$IPT -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATWWTCP &
-	$IPT -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATWWUDP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p tcp -j $CHAINPATWWTCP &
-	$IPT6 -t nat -A $CHAINIPALLOW -p udp -j $CHAINPATWWUDP &
-
-	for PORTS in "${localRedirectPortTCP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENLOCALPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
+	for chain in "${NATCHAINLIST[@]}"; do
+		insert_rules "-t nat -N $chain"
 	done
-	for PORTS in "${localRedirectPortUDP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENLOCALPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-	done
-
-	for PORTS in "${redirectPortTCP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENLOCALPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT -A $CHAINOPENCRPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENCRPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATLOCALTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-
-		$IPT -t nat -A $CHAINPATCRTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATCRTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATCRTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATCRTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-	done
-	for PORTS in "${redirectPortUDP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENLOCALPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT -A $CHAINOPENCRPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENLOCALPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENCRPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATLOCALUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-
-		$IPT -t nat -A $CHAINPATCRUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATCRUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATCRUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATCRUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-	done
-	
-	for PORTS in "${WWredirectPortTCP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENWWPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENWWPORTTCP -p tcp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATWWTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATWWTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATWWTCP -p tcp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATWWTCP -p tcp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-	done
-	for PORTS in "${WWredirectPortUDP[@]}"; do
-		IFS=',' read -r -a PORTSC <<< $PORTS
-		$IPT -A $CHAINOPENWWPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-		$IPT6 -A $CHAINOPENWWPORTUDP -p udp --dport ${PORTSC[1]} -j ACCEPT &
-
-		$IPT -t nat -A $CHAINPATWWUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT -t nat -A $CHAINPATWWUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-		$IPT6 -t nat -A $CHAINPATWWUDP -p udp --dport ${PORTSC[0]} -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-		$IPT6 -t nat -A $CHAINPATWWUDP -p udp --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]}
-	done
-
-	# On souhaite choisir quand ouvrir et fermer les ports de portsentry et son ultimate ban
-	for PORT in "${portSentryTCP[@]}"; do
-		$IPT -A $CHAINPORTSENTRYOPENTCP -p tcp --dport $PORT -j $CHAINPORTSENTRYLOG &
-		$IPT6 -A $CHAINPORTSENTRYOPENTCP -p tcp --dport $PORT -j $CHAINPORTSENTRYLOG &
-		$IPT -A $CHAINPORTSENTRYCLOSETCP -p tcp --dport $PORT -j DROP &
-		$IPT6 -A $CHAINPORTSENTRYCLOSETCP -p tcp --dport $PORT -j DROP &
-	done
-
-	for PORT in "${portSentryUDP[@]}"; do
-		$IPT -A $CHAINPORTSENTRYOPENUDP -p udp --dport $PORT -j $CHAINPORTSENTRYLOG &
-		$IPT6 -A $CHAINPORTSENTRYOPENUDP -p udp --dport $PORT -j $CHAINPORTSENTRYLOG &
-		$IPT -A $CHAINPORTSENTRYCLOSEUDP -p udp --dport $PORT -j DROP &
-		$IPT6 -A $CHAINPORTSENTRYCLOSEUDP -p udp --dport $PORT -j DROP &
-	done
-
-	$IPT -A $CHAINPORTSENTRYLOG -m state --state NEW -j LOG --log-prefix "[iptables-portsentry]: "
-	$IPT -A $CHAINPORTSENTRYLOG -j ACCEPT &
-	$IPT6 -A $CHAINPORTSENTRYLOG -m state --state NEW -j LOG --log-prefix "[iptables-portsentry]: "
-	$IPT6 -A $CHAINPORTSENTRYLOG -j DROP &
-
-	$IPT -A $CHAINDROPLOG -m state --state NEW -j LOG --log-prefix "[iptables-portsentry]: "
-	$IPT -A $CHAINDROPLOG -j DROP &
-	$IPT6 -A $CHAINDROPLOG -m state --state NEW -j LOG --log-prefix "[iptables-portsentry]: "
-	$IPT6 -A $CHAINDROPLOG -j DROP &
-	
-	# Nous souhaitons log le trafic sortant vers des IPs problématiques
-	$IPT -A $CHAINOUTTRAFIC -m set --match-set $IPSLISTBADIP src -m state --state NEW -j LOG --log-prefix "[iptables-warning]: " --log-level 7 --log-uid
-	$IPT6 -A $CHAINOUTTRAFIC -m set --match-set ${IPSLISTBADIP}6 src -m state --state NEW -j LOG --log-prefix "[iptables-warning]: " --log-level 7 --log-uid
-	$IPT -A $CHAINOUTTRAFIC -m set --match-set crowdsec-blacklists src -m state --state NEW -j LOG --log-prefix "[iptables-warning]: " --log-level 7 --log-uid
-	$IPT6 -A $CHAINOUTTRAFIC -m set --match-set crowdsec6-blacklists src -m state --state NEW -j LOG --log-prefix "[iptables-warning]: " --log-level 7 --log-uid
-	$IPT -A $CHAINOUTTRAFIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
-	$IPT -A $CHAINOUTTRAFIC -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
-	$IPT6 -A $CHAINOUTTRAFIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
-	$IPT6 -A $CHAINOUTTRAFIC -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT
 	
 	# Après ce petit temps de configuration, nous pouvons rediriger les main
-	# On configure aussi les redirections
-	$IPT -A $CHAINOPENTCP -m set --match-set $IPSLOCALIPS src -j $CHAINOPENLOCALPORTTCP &
-	$IPT -t nat -A $CHAINPATTCP -m set --match-set $IPSLOCALIPS src -j $CHAINPATLOCALTCP &
-	$IPT6 -A $CHAINOPENTCP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINOPENLOCALPORTTCP &
-	$IPT6 -t nat -A $CHAINPATTCP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINPATLOCALTCP &
-
-	$IPT -A $CHAINOPENUDP -m set --match-set $IPSLOCALIPS src -j $CHAINOPENLOCALPORTUDP &
-	$IPT -t nat -A $CHAINPATUDP -m set --match-set $IPSLOCALIPS src -j $CHAINPATLOCALUDP &
-	$IPT6 -A $CHAINOPENUDP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINOPENLOCALPORTUDP &
-	$IPT6 -t nat -A $CHAINPATUDP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINPATLOCALUDP &
-
-	$IPT -A $CHAINOPENTCP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTTCP &
-	$IPT -t nat -A $CHAINPATTCP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRTCP &
-	$IPT6 -A $CHAINOPENTCP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTTCP &
-	$IPT6 -t nat -A $CHAINPATTCP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRTCP &
-
-	$IPT -A $CHAINOPENUDP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTUDP &
-	$IPT -t nat -A $CHAINPATUDP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRUDP &
-	$IPT6 -A $CHAINOPENUDP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTUDP &
-	$IPT6 -t nat -A $CHAINPATUDP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRUDP &
-
-	$IPT -A $CHAINOPENTCP -j $CHAINOPENWWPORTTCP &
-	$IPT -t nat -A $CHAINPATTCP -j $CHAINPATWWTCP &
-	$IPT6 -A $CHAINOPENTCP -j $CHAINOPENWWPORTTCP &
-	$IPT6 -t nat -A $CHAINPATTCP -j $CHAINPATWWTCP &
+	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
+	# On prépare déjà le cas des redirections pour l'interface local
+	insert_rules "-t nat -A $CHAINPATMAIN -i lo -j $CHAINIPALLOW" &
 	
-	$IPT -A $CHAINOPENUDP -j $CHAINOPENWWPORTUDP &
-	$IPT -t nat -A $CHAINPATUDP -j $CHAINPATWWUDP &
-	$IPT6 -A $CHAINOPENUDP -j $CHAINOPENWWPORTUDP &
-	$IPT6 -t nat -A $CHAINPATUDP -j $CHAINPATWWUDP &
-
-	$IPT -A $CHAINOPENTCP -j $CHAINPORTSENTRYOPENTCP &
-	$IPT6 -A $CHAINOPENTCP -j $CHAINPORTSENTRYOPENTCP &
-	
-	$IPT -A $CHAINOPENUDP -j $CHAINPORTSENTRYOPENUDP &
-	$IPT6 -A $CHAINOPENUDP -j $CHAINPORTSENTRYOPENUDP &
-	
-	$IPT -t nat -A $CHAINPATMAIN -i lo -j $CHAINIPALLOW &
-	$IPT6 -t nat -A $CHAINPATMAIN -i lo -j $CHAINIPALLOW &
-	$IPT -A INPUT -i lo -j ACCEPT
-	$IPT6 -A INPUT -i lo -j ACCEPT
-
-	# On autorise les connexions dont l état est RELATED ou ESTABLISHED
-	# L'ouverture complete se fait ici a utiliser avec precautions
-	echo "Réglages principaux des interfaces"
-	for zone in "${rulesZone[@]}"; do
-		# On autorise les connexions dont l état est RELATED ou ESTABLISHED
-		$IPT -A $zone -j $CHAINOPENSATE
-		$IPT6 -A $zone -j $CHAINOPENSATE 2> /dev/null
-		for ITER in "${INTEROut[@]}"; do
-			# On autorise nos IP mais il ne faut pas qu'elle puissent être ban par portsentry
-			$IPT -A $zone -i $ITER -m set --match-set $IPSLISTGOODIP src -j $CHAINIPALLOW
-			$IPT6 -A $zone -i $ITER -m set --match-set ${IPSLISTGOODIP}6 src -j $CHAINIPALLOW 2> /dev/null
-			# Mais on bloque celles qu'on ne souhaite pas
-			$IPT -A $zone -i $ITER -m set --match-set $IPSLISTBADIP src -j DROP
-			$IPT6 -A $zone -i $ITER -m set --match-set ${IPSLISTBADIP}6 src -j DROP 2> /dev/null
-			$IPT -A $zone -i $ITER -m set --match-set crowdsec-blacklists src -j DROP
-			$IPT6 -A $zone -i $ITER -m set --match-set crowdsec6-blacklists src -j DROP 2> /dev/null
-		done
+	# On souhaite que nos VM puissent avoir internet rapidement. Il faut donc paramétrer rapidement de forwading
+	insert_rules "-N $CHAINFORWARDTRAFIC"
+	insert_rules "-t nat -N $CHAINPOSTROUTINGNAT"
+	insert_rules "-t nat -I POSTROUTING 1 -j $CHAINPOSTROUTINGNAT" &
+	for INTER in "${interfaceToGoOutSide[@]}"; do
+		# inter,net/mask,net6/mask
+		insert_rules_nat_forward_interface $INTER &
 	done
 
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENLOCALPORTTCP" "" "" "-j ACCEPT" "tcp" "${localOpenPortsTCP[@]}" &
+	
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENLOCALPORTUDP" "" "" "-j ACCEPT" "udp" "${localOpenPortsUDP[@]}" &
+	
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENLOCALPORTTCP" "" "" "-j ACCEPT" "tcp" "${openPortTCP[@]}" &
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENCRPORTTCP" "" "" "-j ACCEPT" "tcp" "${openPortTCP[@]}" &
+
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENLOCALPORTUDP" "" "" "-j ACCEPT" "udp" "${openPortUDP[@]}" &
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENCRPORTUDP" "" "" "-j ACCEPT" "udp" "${openPortUDP[@]}" &
+
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENWWPORTTCP" "" "" "-j ACCEPT" "tcp" "${WWopenPortTCP[@]}" &
+	
+	insert_rules_list_ports "-t filter" "-A $CHAINOPENWWPORTUDP" "" "" "-j ACCEPT" "udp" "${WWopenPortUDP[@]}" &
+
+	# insert_rules_list_redirections "-AI NAT" "-AI FILTER" "-m ipv4" "-m ipv6" "-j FILTER" "tcp/udp" ARRAY
+	insert_rules_list_redirections "-A $CHAINPATLOCALTCP" "-A $CHAINOPENLOCALPORTTCP" "" "" "-j ACCEPT" "tcp" "${localRedirectPortTCP[@]}" &
+	
+	insert_rules_list_redirections "-A $CHAINPATLOCALUDP" "-A $CHAINOPENLOCALPORTUDP" "" "" "-j ACCEPT" "udp" "${localRedirectPortUDP[@]}" &
+	
+	insert_rules_list_redirections "-A $CHAINPATLOCALTCP" "-A $CHAINOPENLOCALPORTTCP" "" "" "-j ACCEPT" "tcp" "${redirectPortTCP[@]}" &
+	insert_rules_list_redirections "-A $CHAINPATCRTCP" "-A $CHAINOPENCRPORTTCP" "" "" "-j ACCEPT" "tcp" "${redirectPortTCP[@]}" &
+	
+	insert_rules_list_redirections "-A $CHAINPATLOCALUDP" "-A $CHAINOPENLOCALPORTUDP" "" "" "-j ACCEPT" "udp" "${redirectPortUDP[@]}" &
+	insert_rules_list_redirections "-A $CHAINPATCRUDP" "-A $CHAINOPENCRPORTUDP" "" "" "-j ACCEPT" "udp" "${redirectPortUDP[@]}" &
+	
+	insert_rules_list_redirections "-A $CHAINPATWWTCP" "-A $CHAINOPENWWPORTTCP" "" "" "-j ACCEPT" "tcp" "${WWredirectPortTCP[@]}" &
+	
+	insert_rules_list_redirections "-A $CHAINPATWWUDP" "-A $CHAINOPENWWPORTUDP" "" "" "-j ACCEPT" "udp" "${WWredirectPortUDP[@]}" &
+
+	# On souhaite choisir quand ouvrir et fermer les ports de portsentry et son ultimate ban
+	read -a portSentryTCP <<< `grep -m 1 "^TCP_PORTS" /etc/portsentry/portsentry.conf | sed 's/TCP_PORTS=//' | sed 's/"//g' | tr ',' ' '`
+	read -a portSentryUDP <<< `grep -m 1 "^UDP_PORTS" /etc/portsentry/portsentry.conf | sed 's/UDP_PORTS=//' | sed 's/"//g' | tr ',' ' '`
+	insert_rules_list_ports "-t filter" "-A $CHAINPORTSENTRYOPENTCP" "" "" "-j $CHAINPORTSENTRYLOG" "tcp" "${portSentryTCP[@]}" &
+	insert_rules_list_ports "-t filter" "-A $CHAINPORTSENTRYCLOSETCP" "" "" "-j DROP" "tcp" "${portSentryTCP[@]}" &
+
+	insert_rules_list_ports "-t filter" "-A $CHAINPORTSENTRYOPENUDP" "" "" "-j $CHAINPORTSENTRYLOG" "udp" "${portSentryUDP[@]}" &
+	insert_rules_list_ports "-t filter" "-A $CHAINPORTSENTRYCLOSEUDP" "" "" "-j DROP" "udp" "${portSentryUDP[@]}" &
+
+	insert_rules "-A $CHAINPORTSENTRYLOG -m state --state NEW -j LOG --log-prefix [iptables-portsentry]: " && \
+		$IPT -A $CHAINPORTSENTRYLOG -j ACCEPT && \
+		$IPT6 -A $CHAINPORTSENTRYLOG -j DROP &
+
+	insert_rules "-A $CHAINDROPLOG -m state --state NEW -g $CHAINDROPLOGSELECTOR" && \
+		insert_rules "-A $CHAINDROPLOGSELECTOR -m addrtype --dst-type MULTICAST -j DROP" && \
+		insert_rules "-A $CHAINDROPLOGSELECTOR -m addrtype --dst-type BROADCAST -j DROP" && \
+		insert_rules "-A $CHAINDROPLOGSELECTOR -j LOG --log-prefix [iptables-trash]: --log-level 7 --log-uid" && \
+		insert_rules "-A $CHAINDROPLOGSELECTOR -j DROP" && \
+		insert_rules "-A $CHAINDROPLOG -j DROP" &
+	
+	# On configure le forward pour eviter de prendre trop de temps pour les VM
+	insert_rules "-N $CHAINFORWARDFILTER"
+	insert_rules "-I FORWARD 1 -j $CHAINFORWARDTRAFIC" && insert_rules "-I FORWARD 1 -m state --state NEW -j $CHAINFORWARDFILTER" &
+	insert_rules_with_test_ok "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -j $CHAINDROPLOG" "" &
+	insert_rules_with_test_ok_ipv4 "-A $CHAINFORWARDFILTER -m set --match-set $IPSLISTBADIP src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-A $CHAINFORWARDFILTER -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-A $CHAINFORWARDFILTER -m set --match-set crowdsec-blacklists src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-A $CHAINFORWARDFILTER -m set --match-set crowdsec6-blacklists src -j DROP" "" &
+	# On souhaite flitrer les requetes DNS foward. Il serait bien pour notre propre protection.
+	insert_rules "-A $CHAINFORWARDFILTER -p tcp --dport 53 -j $CHAINDROPLOG" &
+	insert_rules "-A $CHAINFORWARDFILTER -p udp --dport 53 -j $CHAINDROPLOG" &
+	insert_rules "-A $CHAINFORWARDFILTER -p tcp --dport 853 -j $CHAINDROPLOG" &
+	insert_rules "-A $CHAINFORWARDFILTER -p udp --dport 853 -j $CHAINDROPLOG" &
+	insert_rules_with_test_ok_ipv4 "-A $CHAINFORWARDFILTER -m set --match-set $IPSLISTBADIP dst -j LOG --log-prefix [iptables-warning]:forward-badIP  --log-level 7 --log-uid --log-ip-options" "" &
+	insert_rules_with_test_ok_ipv6 "-A $CHAINFORWARDFILTER -m set --match-set ${IPSLISTBADIP}6 dst -j LOG --log-prefix [iptables-warning]:forward-badIP  --log-level 7 --log-uid --log-ip-options" "" &
+	insert_rules_with_test_ok_ipv4 "-A $CHAINFORWARDFILTER -m set --match-set crowdsec-blacklists dst -j LOG --log-prefix [iptables-warning]:forward-crowdsec  --log-level 7 --log-uid --log-ip-options" "" &
+	insert_rules_with_test_ok_ipv6 "-A $CHAINFORWARDFILTER -m set --match-set crowdsec6-blacklists dst -j LOG --log-prefix [iptables-warning]:forward-crowdsec: --log-level 7 --log-uid --log-ip-options" "" &
+
+	# Nous souhaitons log le trafic sortant vers des IPs problématiques
+	insert_rules_with_test_ok_ipv4 "-A $CHAINOUTTRAFICLOG -m set --match-set $IPSLISTBADIP dst -j LOG --log-prefix [iptables-warning]:out-badIP  --log-level 7 --log-uid --log-ip-options" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINOUTTRAFICLOG -m set --match-set ${IPSLISTBADIP}6 dst -j LOG --log-prefix [iptables-warning]:out-badIP  --log-level 7 --log-uid --log-ip-options" "" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINOUTTRAFICLOG -m set --match-set crowdsec-blacklists dst -j LOG --log-prefix [iptables-warning]:out-crowdsec  --log-level 7 --log-uid --log-ip-options" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINOUTTRAFICLOG -m set --match-set crowdsec6-blacklists dst -j LOG --log-prefix [iptables-warning]:out-crowdsec  --log-level 7 --log-uid --log-ip-options" "" &
+	insert_rules "-A $CHAINOUTTRAFIC -m state --state NEW -j $CHAINOUTTRAFICLOG" && \
+		insert_rules "-A $CHAINOUTTRAFIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT" && \
+		insert_rules "-A $CHAINOUTTRAFIC -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT" &
+
+	# On configure les mains pour lancer au plus vite les traitements
+	# On pense à drop les connexions de toute les IPs indésirable
+	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTER -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
+		insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTER -m set --match-set crowdsec-blacklists src -j RETURN" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTER -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTER -m set --match-set crowdsec6-blacklists src -j RETURN" "" && \
+		insert_rules "-t nat -A $CHAINMAINOUTINTER -p tcp -g $CHAINPATTCP" && \
+		insert_rules "-t nat -A $CHAINMAINOUTINTER -p udp -g $CHAINPATUDP" &
+	
+	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAININTINTER -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAININTINTER -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
+		insert_rules "-t nat -A $CHAINMAININTINTER -p tcp -g $CHAINIPALLOWTCP" && \
+		insert_rules "-t nat -A $CHAINMAININTINTER -p udp -g $CHAINIPALLOWUDP" &
+	
+	$IPT -A $CHAINMAINOUTINTER -p icmp -g $CHAINMAINOUTINTERICMP && \
+		$IPT6 -A $CHAINMAINOUTINTER -p ipv6-icmp -g $CHAINMAINOUTINTERICMP && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTER -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTER -m set --match-set crowdsec-blacklists src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTER -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTER -m set --match-set crowdsec6-blacklists src -j DROP" "" && \
+		insert_rules "-A $CHAINMAINOUTINTER -p tcp -g $CHAINOPENTCP" && \
+		insert_rules "-A $CHAINMAINOUTINTER -p udp -g $CHAINOPENUDP" &
+	
+	$IPT -A $CHAINMAININTINTER -p icmp -g $CHAINMAININTINTERICMP && \
+		$IPT6 -A $CHAINMAININTINTER -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAININTINTER -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAININTINTER -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
+		insert_rules "-A $CHAINMAININTINTER -p tcp -g $CHAINMAININTINTERTCP" && \
+		insert_rules "-A $CHAINMAININTINTER -p udp -g $CHAINMAININTINTERUDP" &
+	
+	insert_rules "-A $CHAINMAININTINTERTCP -j $CHAINOPENLOCALPORTTCP" && insert_rules "-A $CHAINMAININTINTERTCP -j $CHAINOPENWWPORTTCP" && insert_rules "-A $CHAINMAININTINTERTCP -j $CHAINPORTSENTRYOPENTCP" && \
+		insert_rules "-A $CHAINMAININTINTERTCP -j $CHAINDROPLOG" &
+	insert_rules "-A $CHAINMAININTINTERUDP -j $CHAINOPENLOCALPORTUDP" && insert_rules "-A $CHAINMAININTINTERUDP -j $CHAINOPENWWPORTUDP" && insert_rules "-A $CHAINMAININTINTERUDP -j $CHAINPORTSENTRYOPENUDP" && \
+		insert_rules "-A $CHAINMAININTINTERUDP -j $CHAINDROPLOG" &
+
+	$IPT -A $CHAINMAINOUTINTERICMP -m state --state ESTABLISHED,RELATED -j ACCEPT && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry -j DROP" "" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m set --match-set crowdsec-blacklists src -j DROP" "" && \
+		$IPT -A $CHAINMAINOUTINTERICMP -j ACCEPT &
+	
+	$IPT -A $CHAINMAININTINTERICMP -m state --state ESTABLISHED,RELATED -j ACCEPT && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINMAININTINTERICMP -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
+		$IPT -A $CHAINMAININTINTERICMP -j ACCEPT &
+	
+	$IPT6 -A $CHAINMAINOUTINTERICMP -m state --state ESTABLISHED,RELATED -j ACCEPT && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m set --match-set crowdsec6-blacklists src -j DROP" "" && \
+		$IPT6 -A $CHAINMAINOUTINTERICMP -p ipv6-icmp -j ACCEPT &
+	
+	$IPT6 -A $CHAINMAININTINTERICMP -m state --state ESTABLISHED,RELATED -j ACCEPT && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINMAININTINTERICMP -p icmpv6 --icmpv6-type echo-request -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
+		$IPT6 -A $CHAINMAININTINTERICMP -p ipv6-icmp -j ACCEPT &
+	
+	# On doit aussi le configurer pour les ip allow
+	# On autorise nos IP mais il ne faut pas qu'elle puissent être ban par portsentry
+	insert_rules "-t nat -A $CHAINIPALLOW -p tcp -g $CHAINIPALLOWTCP" &
+	insert_rules "-t nat -A $CHAINIPALLOW -p udp -g $CHAINIPALLOWUDP" &
+	
+	insert_rules "-t nat -A $CHAINIPALLOWTCP -j $CHAINPATLOCALTCP" && insert_rules "-t nat -A $CHAINIPALLOWTCP -j $CHAINPATWWTCP" && insert_rules_quietly "-t nat -A $CHAINIPALLOWTCP -j DOCKER" &
+	insert_rules "-t nat -A $CHAINIPALLOWUDP -j $CHAINPATLOCALUDP" && insert_rules "-t nat -A $CHAINIPALLOWUDP -j $CHAINPATWWUDP" && insert_rules_quietly "-t nat -A $CHAINIPALLOWUDP -j DOCKER" &
+	
+	insert_rules "-A $CHAINIPALLOW -p tcp -j $CHAINPORTSENTRYCLOSETCP" && insert_rules "-A $CHAINIPALLOW -p udp -j $CHAINPORTSENTRYCLOSEUDP" && insert_rules "-A $CHAINIPALLOW -j ACCEPT" &
+	
+	insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINPATMAIN -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" ""
+	insert_rules_with_test_ok_ipv6 "-A INPUT -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" ""
+	insert_rules_with_test_ok_ipv4 "-A INPUT -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" ""
+	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINPATMAIN -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" ""
+
+	# On met en place les autorisations pour les interfaces de l'exterieur. J'ai aussi mon ouverture de PLEX (A desactiver au besoin) (A ameliorer au besoin avec une fonction... Sauf qu'il va finir en container soon)
 	# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
-	$IPT -A INPUT -p tcp --dport 32400 -m set --match-set $IPSPLEXIPS src -j ACCEPT
-	$IPT6 -A INPUT -p tcp --dport 32400 -m set --match-set ${IPSPLEXIPS}6 src -j ACCEPT
-	$IPT -t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-	$IPT -t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -j REDIRECT --to-port 32400
-	$IPT6 -t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -m state --state NEW -j LOG --log-prefix "[iptables-forward]: "
-	$IPT6 -t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -j REDIRECT --to-port 32400
+	insert_rules_with_test_ok_ipv4 "-A $CHAINOPENTCP -m set --match-set $IPSLOCALIPS src -j $CHAINOPENLOCALPORTTCP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINOPENTCP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINOPENLOCALPORTTCP" "" && \
+		insert_rules_with_test_ok "-A $CHAINOPENTCP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTTCP" "" && \
+		insert_rules "-A $CHAINOPENTCP -j $CHAINOPENWWPORTTCP" && \
+		insert_rules "-A $CHAINOPENTCP -j $CHAINPORTSENTRYOPENTCP" && \
+		insert_rules_with_test_ok_ipv4 "-A $CHAINOPENTCP -p tcp --dport 32400 -m set --match-set $IPSPLEXIPS src -j ACCEPT" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINOPENTCP -p tcp --dport 32400 -m set --match-set ${IPSPLEXIPS}6 src -j ACCEPT" "" &&\
+		insert_rules "-A $CHAINOPENTCP -j $CHAINDROPLOG" &
+	
+	# On configure aussi les redirections
+	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINPATTCP -m set --match-set $IPSLOCALIPS src -j $CHAINPATLOCALTCP" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINPATTCP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINPATLOCALTCP" "" && \
+		insert_rules_with_test_ok "-t nat -A $CHAINPATTCP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRTCP" "" && \
+		insert_rules "-t nat -A $CHAINPATTCP -j $CHAINPATWWTCP" "" && \
+		insert_rules_quietly "-t nat -A $CHAINPATTCP -j DOCKER" && \
+		insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -m state --state NEW -j LOG --log-prefix [iptables-forward]: " "" && \
+		insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -j REDIRECT --to-port 32400" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -m state --state NEW -j LOG --log-prefix [iptables-forward]: " "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINPATTCP -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -j REDIRECT --to-port 32400" "" &
+	
+	insert_rules_with_test_ok_ipv4 "-A $CHAINOPENUDP -m set --match-set $IPSLOCALIPS src -j $CHAINOPENLOCALPORTUDP" "" && \
+		insert_rules_with_test_ok_ipv6 "-A $CHAINOPENUDP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINOPENLOCALPORTUDP" "" && \
+		insert_rules_with_test_ok "-A $CHAINOPENUDP -m geoip --src-cc $countryOpenPort -j $CHAINOPENCRPORTUDP" "" && \
+		insert_rules "-A $CHAINOPENUDP -j $CHAINOPENWWPORTUDP" && \
+		insert_rules "-A $CHAINOPENUDP -j $CHAINPORTSENTRYOPENUDP" && \
+		insert_rules "-A $CHAINOPENUDP -j $CHAINDROPLOG" &
+	
+	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINPATUDP -m set --match-set $IPSLOCALIPS src -j $CHAINPATLOCALUDP" "" && \
+		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINPATUDP -m set --match-set ${IPSLOCALIPS}6 src -j $CHAINPATLOCALUDP" "" && \
+		insert_rules_with_test_ok "-t nat -A $CHAINPATUDP -m geoip --src-cc $countryOpenPort -j $CHAINPATCRUDP" "" && \
+		insert_rules "-t nat -A $CHAINPATUDP -j $CHAINPATWWUDP" && \
+		insert_rules_quietly "-t nat -A $CHAINPATUDP -j DOCKER" &
+
+	for ITER in "${internInterfaceHaveAccessAsLocal[@]}"; do
+		echo "Create the rules for internal interface $ITER"
+		insert_rules_accept_trafic_local_interface $ITER &
+	done
 
 	for ITER in "${INTEROut[@]}"; do
-		echo "Create the rules for the $ITER"
-		$IPT -A OUTPUT -o $ITER -j $CHAINOUTTRAFIC
-		$IPT6 -A OUTPUT -o $ITER -j $CHAINOUTTRAFIC
-
-		$IPT -A INPUT -i $ITER -p tcp -j $CHAINOPENTCP
-		$IPT6 -A INPUT -i $ITER -p tcp -j $CHAINOPENTCP
-		$IPT -A INPUT -i $ITER -p udp -j $CHAINOPENUDP
-		$IPT6 -A INPUT -i $ITER -p udp -j $CHAINOPENUDP
-
-		$IPT -t nat -A $CHAINPATMAIN -i $ITER -m set --match-set $IPSLISTGOODIP src -j $CHAINIPALLOW &
-		$IPT6 -t nat -A $CHAINPATMAIN -i $ITER -m set --match-set ${IPSLISTGOODIP}6 src -j $CHAINIPALLOW &
-
-		$IPT -t nat -A $CHAINPATMAIN -i $ITER -p tcp -m set ! --match-set $IPSLISTGOODIP src -m set ! --match-set $IPSLISTBADIP src -m set ! --match-set crowdsec-blacklists src -j $CHAINPATTCP &
-		$IPT -t nat -A $CHAINPATMAIN -i $ITER -p udp -m set ! --match-set $IPSLISTGOODIP src -m set ! --match-set $IPSLISTBADIP src -m set ! --match-set crowdsec-blacklists src -j $CHAINPATUDP &
-		$IPT6 -t nat -A $CHAINPATMAIN -i $ITER -p tcp -m set ! --match-set ${IPSLISTGOODIP}6 src -m set ! --match-set ${IPSLISTBADIP}6 src -m set ! --match-set crowdsec6-blacklists src -j $CHAINPATTCP &
-		$IPT6 -t nat -A $CHAINPATMAIN -i $ITER -p udp -m set ! --match-set ${IPSLISTGOODIP}6 src -m set ! --match-set ${IPSLISTBADIP}6 src -m set ! --match-set crowdsec6-blacklists src -j $CHAINPATUDP &
-
-		$IPT -A INPUT -i $ITER -m geoip --src-cc $blockedCountry -j $CHAINDROPLOG
-		$IPT -A INPUT -i $ITER -m geoip --src-cc $blockedCountry2 -j $CHAINDROPLOG
-		#$IPT6 -A INPUT -i $ITER -m geoip --src-cc $blockedCountry -j DROP
-		#$IPT6 -A INPUT -i $ITER -m geoip --src-cc $blockedCountry2 -j DROP
-		#$IPT -A INPUT -i $ITER -m geoip ! --src-cc $countryOpenPort -j DROP
-		#$IPT6 -A INPUT -i $ITER -m geoip ! --src-cc $countryOpenPort -j DROP
+		echo "Create the rules for external interface $ITER"
+		insert_rules "-A OUTPUT -o $ITER -g $CHAINOUTTRAFIC" &
+		insert_rules "-A INPUT -i $ITER -g $CHAINMAINOUTINTER" &
+		insert_rules "-t nat -A $CHAINPATMAIN -i $ITER -g $CHAINMAINOUTINTER" &
 	done
-
-	echo "On accepte toute les requetes ICMP des pays souhaités"
-	$IPT -A INPUT -p icmp -j ACCEPT #--src-cc $countryOpenPort
-	$IPT6 -A INPUT -p ipv6-icmp -j ACCEPT #--src-cc $countryOpenPort
-
-	echo "On ouvre les ports des containers docker"
-	for PORT in "${openPortDockerTCP[@]}"; do
-		$IPT -A "DOCKER" -p tcp --dport $PORT -j ACCEPT
-		$IPT6 -A "DOCKER" -p tcp --dport $PORT -j ACCEPT 2> /dev/null
-	done
-
-	#if (( ${#interfaceToGoOutSide[@]} )); then
-	#	$IPT -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
-	#	$IPT6 -t nat -A POSTROUTING -o $mainInter -j MASQUERADE &
-	#fi
-	for INTER in "${interfaceToGoOutSide[@]}"; do
-		$IPT -t nat -A POSTROUTING -i $INTER -o $mainInter -j MASQUERADE &
-		$IPT6 -t nat -A POSTROUTING -i $INTER -o $mainInter -j MASQUERADE &
-
-		$IPT -A INPUT -i $INTER -j $CHAINIPALLOW
-		$IPT6 -A INPUT -i $INTER -j $CHAINIPALLOW
-
-		$IPT -t nat -A $CHAINPATMAIN -i $INTER -j $CHAINIPALLOW &
-		$IPT6 -t nat -A $CHAINPATMAIN -i $INTER -j $CHAINIPALLOW &
-
-		$IPT -A FORWARD -i $INTER -o $mainInter -j ACCEPT &
-		$IPT -A FORWARD -i $mainInter -o $INTER -m state --state ESTABLISHED,RELATED -j ACCEPT &
-		$IPT6 -A FORWARD -i $INTER -o $mainInter -j ACCEPT &
-		$IPT6 -A FORWARD -i $mainInter -o $INTER -m state --state ESTABLISHED,RELATED -j ACCEPT &
-	done
-
-	for INTER in "${interfaceToForwardToDocker[@]}"; do
-		$IPT -A FORWARD -i docker0 -o $INTER -j ACCEPT &
-		$IPT -A FORWARD -i $INTER -o docker0 -j ACCEPT &
-		$IPT6 -A FORWARD -i docker0 -o $INTER -j ACCEPT &
-		$IPT6 -A FORWARD -i $INTER -o docker0 -j ACCEPT &
-	done
-
-	# On drop tout le reste du traffic et on le log
-	$IPT -A INPUT -m state --state NEW -j LOG --log-prefix "[iptables-trash]: "
-	$IPT -A INPUT -j DROP &
-	$IPT6 -A INPUT -m state --state NEW -j LOG --log-prefix "[iptables-trash]: "
-	$IPT6 -A INPUT -j DROP &
 
 	wait
+	# En toute fin, on ajoute le liens vers le docker. Nous pouvons ainsi valider que nos connexions sont bonnes.
+	insert_rules "-A INPUT -j $CHAINDROPLOG"
+	insert_rules_quietly "-t nat -A $CHAINPATMAIN -j DOCKER"
 
 return 0
+}
+
+insert_rules() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid1
+	local pid2
+	$IPT $cmd_args & pid1=$!
+	$IPT6 $cmd_args & pid2=$!
+	wait $pid1 || echo "Bugged v4 $cmd_args"
+	wait $pid2 || echo "Bugged v6 $cmd_args"
+	return 0
+}
+
+insert_rules_quietly() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid1
+	local pid2
+	$IPT $cmd_args 2> /dev/null & pid1=$!
+	$IPT6 $cmd_args 2> /dev/null & pid2=$!
+	wait $pid1
+	wait $pid2
+	return 0
+}
+
+reset_rules_docker()
+{
+	insert_rules "-t nat -F PREROUTING"
+	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" ""
+	return 0
+}
+#
+# Function that remove chain
+#
+remove_chain()
+{
+	local table=$1
+	local chain=$2
+	local pid1
+	local pid2
+	$IPT -t $table -F $chain 2> /dev/null && $IPT -t $table -X $chain 2> /dev/null & pid1=$!
+	$IPT6 -t $table -F $chain 2> /dev/null && $IPT6 -t $table -X $chain 2> /dev/null & pid2=$!
+	wait $pid1
+	wait $pid2
+	return 0
 }
 
 #
@@ -398,70 +371,253 @@ return 0
 #
 flush_rules()
 {
-	$IPT -F INPUT
-	$IPT6 -F INPUT
-
-	$IPT -F DOCKER 2> /dev/null
-	$IPT6 -F DOCKER 2> /dev/null
-	for INTER in "${interfaceToForwardToDocker[@]}"; do
-		$IPT -D FORWARD -i docker0 -o $INTER -j ACCEPT 2> /dev/null
-		$IPT -D FORWARD -i $INTER -o docker0 -j ACCEPT 2> /dev/null
-		$IPT -D FORWARD -o $INTER -j REJECT --reject-with icmp-port-unreachable 2> /dev/null
-		$IPT -D FORWARD -i $INTER -j REJECT --reject-with icmp-port-unreachable 2> /dev/null
-		$IPT6 -D FORWARD -i docker0 -o $INTER -j ACCEPT 2> /dev/null
-		$IPT6 -D FORWARD -i $INTER -o docker0 -j ACCEPT 2> /dev/null
-	done
-	for INTER in "${interfaceToGoOutSide[@]}"; do
-		$IPT -t nat -D POSTROUTING -i $INTER -o $mainInter -j MASQUERADE 2> /dev/null
-		$IPT6 -t nat -D POSTROUTING -i $INTER -o $mainInter -j MASQUERADE 2> /dev/null
-		$IPT -D FORWARD -i $INTER -o $mainInter -j ACCEPT 2> /dev/null
-		$IPT -D FORWARD -i $mainInter -o $INTER -m state --state ESTABLISHED,RELATED -j ACCEPT 2> /dev/null
-		$IPT6 -D FORWARD -i $INTER -o $mainInter -j ACCEPT 2> /dev/null
-		$IPT6 -D FORWARD -i $mainInter -o $INTER -m state --state ESTABLISHED,RELATED -j ACCEPT 2> /dev/null
-	done
-
-	$IPT -t nat -D POSTROUTING -o $mainInter -j MASQUERADE 2> /dev/null
-	$IPT6 -t nat -D POSTROUTING -o $mainInter -j MASQUERADE 2> /dev/null
+	declare -a pids=() 
+	insert_rules "-P INPUT ACCEPT" & pids+=($!)
+	insert_rules "-P FORWARD ACCEPT" & pids+=($!)
+	insert_rules "-F INPUT" & pids+=($!)
+	insert_rules "-t raw -F PREROUTING" & pids+=($!)
+	insert_rules "-t nat -F PREROUTING" & pids+=($!)
+	insert_rules "-t nat -D POSTROUTING -j $CHAINPOSTROUTINGNAT" & pids+=($!)
+	insert_rules "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
+	insert_rules "-D FORWARD -m state --state NEW -j $CHAINFORWARDFILTER" & pids+=($!)
 
 	#$IPT -F FORWARD
-	$IPT -F OUTPUT
-	$IPT6 -F OUTPUT
-
+	insert_rules "-F OUTPUT" & pids+=($!)
+	
+	declare -a pidsb=() 
+	wait "${pids[@]}"
+	remove_chain "raw" $CHAINICMPTRAFIC & pidsb+=($!)
+	remove_chain "filter" $CHAINFORWARDFILTER & pidsb+=($!)
+	remove_chain "filter" $CHAINFORWARDTRAFIC & pidsb+=($!)
+	remove_chain "nat" $CHAINPOSTROUTINGNAT & pidsb+=($!)
 	for chain in "${SPECIALCHAINLIST[@]}"; do
-		$IPT -F $chain 2> /dev/null
-		$IPT6 -F $chain 2> /dev/null
-		$IPT -X $chain 2> /dev/null
-		$IPT6 -X $chain 2> /dev/null
+		remove_chain "filter" $chain
 	done
 
-	$IPT -t nat -D PREROUTING -j $CHAINPATMAIN 2> /dev/null
-	$IPT6 -t nat -D PREROUTING -j $CHAINPATMAIN 2> /dev/null
 	for chain in "${NATCHAINLIST[@]}"; do
-		$IPT -t nat -F $chain 2> /dev/null
-		$IPT6 -t nat -F $chain 2> /dev/null
-		$IPT -t nat -X $chain 2> /dev/null
-		$IPT6 -t nat -X $chain 2> /dev/null
+		remove_chain "nat" $chain
 	done
 
+	wait "${pidsb[@]}"
+	return 0
+}
+
+# insert_rules_list_ports "-t " "-AI" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
+insert_rules_list_ports()
+{
+	local cmd_args_v4=""
+	local cmd_args_v6=""
+	local option_t=$1 #-t nat/
+	shift
+	cmd_args_v4+="$option_t"
+	cmd_args_v6+="$option_t"
+	local option_A_I=$1 #-A ?/-I ?
+	shift
+	cmd_args_v4+=" $option_A_I"
+	cmd_args_v6+=" $option_A_I"
+	local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
+	shift
+	if [ ! -z "$option_m_v4" ]; then
+		cmd_args_v4+=" $option_m_v4"
+	fi
+	local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
+	shift
+	if [ ! -z "$cmd_args_v6" ]; then
+		cmd_args_v6+=" $option_m_v6"
+	fi
+	local option_j=$1 #-j ACCEPT
+	shift
+	local proto=$1 #tcp/udp
+	shift
+	local ports=("$@")
+	
+	local PORT
+	for PORT in "${ports[@]}"; do
+		$IPT $cmd_args_v4 -p $proto --dport $PORT $option_j &
+		$IPT6 $cmd_args_v6 -p $proto --dport $PORT $option_j &
+	done
+	wait
+	return 0
+}
+
+# insert_rules_list_redirections "-AI NAT" "-AI FILTER" "-m ipv4" "-m ipv6" "-j FILTER" "tcp/udp" ARRAY
+insert_rules_list_redirections()
+{
+	local cmd_args_v4_nat="-t nat"
+	local cmd_args_v6_nat="-t nat"
+	local cmd_args_v4_filter="-t filter"
+	local cmd_args_v6_filter="-t filter"
+	local option_A_I_nat=$1 #-A ?/-I ?
+	shift
+	cmd_args_v4_nat+=" $option_A_I_nat"
+	cmd_args_v6_nat+=" $option_A_I_nat"
+	local option_A_I_filter=$1 #-A ?/-I ?
+	shift
+	cmd_args_v4_filter+=" $option_A_I_filter"
+	cmd_args_v6_filter+=" $option_A_I_filter"
+	local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
+	shift
+	if [ ! -z "$option_m_v4" ]; then
+		cmd_args_v4_nat+=" $option_m_v4"
+		cmd_args_v4_filter+=" $option_m_v4"
+	fi
+	local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
+	shift
+	if [ ! -z "$cmd_args_v6" ]; then
+		cmd_args_v6_nat+=" $option_m_v6"
+		cmd_args_v6_filter+=" $option_m_v6"
+	fi
+	local option_j=$1 #-j ACCEPT
+	shift
+	local proto=$1 #tcp/udp
+	shift
+	local redirectPorts=("$@")
+	
+	local PORTS
+	local PORTSC
+	for PORTS in "${redirectPorts[@]}"; do
+		IFS=',' read -r -a PORTSC <<< $PORTS
+		$IPT $cmd_args_v4_filter -p $proto --dport ${PORTSC[1]} $option_j &
+		$IPT6 $cmd_args_v6_filter -p $proto --dport ${PORTSC[1]} $option_j &
+
+		$IPT $cmd_args_v4_nat -m state --state NEW -p $proto --dport ${PORTSC[0]} -j LOG --log-prefix "[iptables-forward]: " && $IPT $cmd_args_v4_nat -p $proto --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]} &
+		$IPT6 $cmd_args_v6_nat -m state --state NEW -p $proto --dport ${PORTSC[0]}  -j LOG --log-prefix "[iptables-forward]: " && $IPT6 $cmd_args_v6_nat -p $proto --dport ${PORTSC[0]} -j REDIRECT --to-port ${PORTSC[1]} &
+	done
+	wait
+	return 0
+}
+
+insert_rules_with_test_ok_ipv4()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local i=0
+	$IPT $cmd_args > /dev/null 2>&1
+	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+		((i++))
+		sleep 1
+		$IPT $cmd_args >/dev/null 2>&1
+	done
+	if [ $? -ne 0 ]; then
+		$IPT $cmd_args
+		echo "Bugged v4 $cmd_args"
+		if [ ! -z "$cmd_args_back" ]; then
+			$IPT $cmd_args_back
+		fi
+	fi
+	return 0
+}
+
+insert_rules_with_test_ok_ipv6()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local i=0
+	$IPT6 $cmd_args > /dev/null 2>&1
+	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+		((i++))
+		sleep 1
+		$IPT6 $cmd_args >/dev/null 2>&1
+	done
+	if [ $? -ne 0 ]; then
+		$IPT6 $cmd_args
+		echo "Bugged v6 $cmd_args"
+		if [ ! -z "$cmd_args_back" ]; then
+			$IPT6 $cmd_args_back
+		fi
+	fi
+	return 0
+}
+
+insert_rules_with_test_ok()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local pid1
+	local pid2
+	insert_rules_with_test_ok_ipv4 "$cmd_args" "$cmd_args_back" & pid1=$!
+	insert_rules_with_test_ok_ipv6 "$cmd_args" "$cmd_args_back" & pid2=$!
+	wait $pid1
+	wait $pid2
+	return 0
+}
+
+insert_rules_nat_forward_interface()
+{
+	local INTER=$1 # inter,net/mask,net6/mask
+	local INTERC
+	IFS=',' read -r -a INTERC <<< $INTER
+	$IPT -t nat -A $CHAINPOSTROUTINGNAT ! -o ${INTERC[0]} -s ${INTERC[1]} ! -d ${INTERC[1]} -j MASQUERADE &
+	$IPT6 -t nat -A $CHAINPOSTROUTINGNAT ! -o ${INTERC[0]} -s ${INTERC[2]} ! -d ${INTERC[2]} -j MASQUERADE &
+	
+	$IPT -A $CHAINFORWARDTRAFIC -i ${INTERC[0]} ! -o ${INTERC[0]} -s ${INTERC[1]} ! -d ${INTERC[1]} -j ACCEPT &
+	$IPT -A $CHAINFORWARDTRAFIC ! -i ${INTERC[0]} -o ${INTERC[0]} ! -s ${INTERC[1]} -d ${INTERC[1]} -m state --state ESTABLISHED,RELATED -j ACCEPT &
+	$IPT6 -A $CHAINFORWARDTRAFIC -i ${INTERC[0]} ! -o ${INTERC[0]} -s ${INTERC[2]} ! -d ${INTERC[2]} -j ACCEPT &
+	$IPT6 -A $CHAINFORWARDTRAFIC ! -i ${INTERC[0]} -o ${INTERC[0]} ! -s ${INTERC[2]} -d ${INTERC[2]} -m state --state ESTABLISHED,RELATED -j ACCEPT &
+	wait
+	return 0
+}
+
+insert_rules_accept_trafic_local_interface()
+{
+	local INTER=$1 # inter,net/mask,net6/mask
+	local INTERC
+	IFS=',' read -r -a INTERC <<< $INTER
+	
+	$IPT -A INPUT -i ${INTERC[0]} -s ${INTERC[1]} -g $CHAINMAININTINTER &
+	$IPT6 -A INPUT -i ${INTERC[0]} -s ${INTERC[2]} -g $CHAINMAININTINTER &
+	
+	$IPT -t nat -A $CHAINPATMAIN -i ${INTERC[0]} -s ${INTERC[1]} -g $CHAINMAININTINTER &
+	$IPT6 -t nat -A $CHAINPATMAIN -i ${INTERC[0]} -s ${INTERC[2]} -g $CHAINMAININTINTER &
+	
+	wait
 	return 0
 }
 
 command="$1"
 case "$command" in
-        start|force-start|restart|force-restart|reload|force-reload)
+        start|force-start)
+				/bin/bash /etc/firewall/firewall.set.ip &
                 set_rules
                 ;;
+
         stop)
+				echo "If you want clean rules, ask me clean !"
+				;;
+
+		restart|force-restart|reload|force-reload)
+				/bin/bash /etc/firewall/firewall.set.ip &
+				# On réinitialise le firewall
+				flush_rules
+				set_rules
+				;;
+
+		all-restart)
+				/bin/bash /etc/firewall/firewall.set.ip &
+				/bin/bash /etc/firewall/firewall.clean.block.ip &
+				flush_rules
+				set_rules
+				;;
+
+		reload-rules)
+				flush_rules
+				set_rules
+				;;
+
+		clean)
                 flush_rules
                 ;;
 
         status)
-                $IPT -L INPUT -v -n
-		$IPT -L FORWARD -v -n
-		$IPT -L OUTPUT -v -n
-                $IPT6 -L -v -n
-                ;;
+			$IPT -L INPUT -v -n
+			$IPT -L FORWARD -v -n
+			$IPT -L OUTPUT -v -n
+			$IPT6 -L INPUT -v -n
+			$IPT6 -L FORWARD -v -n
+			$IPT6 -L OUTPUT -v -n
+			;;
         *)
+wait
 esac
 
 #update-rc.d firewall defaults;
