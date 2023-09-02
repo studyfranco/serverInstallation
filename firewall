@@ -436,11 +436,16 @@ set_rules()
 	
 	# Il n'est pas utile de forward les traffic vers les ports dhcp
 	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 67 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 68 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 547 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 546 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	# On souhaite flitrer les requetes DNS foward. Il serait bien pour notre propre protection.
 	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 9050 -g $CHAINDROPLOGWITHOUTSELECTOR" &
 	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type address-mask-request -g $CHAINDROPLOGWITHOUTSELECTOR &
 	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type timestamp-request -g $CHAINDROPLOGWITHOUTSELECTOR &
@@ -898,12 +903,12 @@ insert_rules_list_dnat_forward()
 			insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}"
 			insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}"
 			if [ ! -z "${dnatPORTC[2]}" ]; then
-				$IPT -C ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[2]} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[2]} -j ACCEPT & pids+=($!)
-				$IPT -C ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[2]} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[2]} -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} ! -i ${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[2]} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} ! -i ${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[2]} -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} ! -o ${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[2]} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} ! -o ${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[2]} -j ACCEPT & pids+=($!)
 			fi
 			if [ ! -z "${dnatPORTC[3]}" ]; then
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[3]} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[3]} -j ACCEPT & pids+=($!)
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[3]} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[3]} -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} ! -i ${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[3]} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} ! -i ${dnatPORTC[1]} -p $proto --dport ${dnatPORTC[4]} -d ${dnatPORTC[3]} -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} ! -o ${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[3]} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} ! -o ${dnatPORTC[1]} -p $proto --sport ${dnatPORTC[4]} -s ${dnatPORTC[3]} -j ACCEPT & pids+=($!)
 			fi
 		fi
 		wait "${pids[@]}"
@@ -976,14 +981,14 @@ insert_rules_list_docker_forward()
 			insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]}"
 			local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.IPAddress }}" ${containerDNATC[2]})
 			if [ ! -z "${ipv4}" ]; then
-				$IPT -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -j ACCEPT & pids+=($!)
-				$IPT -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -j ACCEPT & pids+=($!)
 			fi
 			local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.GlobalIPv6Address }}" ${containerDNATC[2]})
 			if [ ! -z "${ipv6}" ]; then
 				echo "${containerDNAT} ${ipv6}"
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -j ACCEPT & pids+=($!)
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -j ACCEPT & pids+=($!)
 			fi
 		fi
 		wait "${pids[@]}"
