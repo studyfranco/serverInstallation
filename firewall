@@ -429,6 +429,8 @@ set_rules()
 		insert_rules_quietly "-A $CHAINFORWARDFILTER -j DOCKER-ISOLATION-STAGE-1" && \
 		$IPT -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
 		$IPT6 -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		$IPT -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		$IPT6 -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
 		insert_rules "-A $CHAINFORWARDFILTER -p udp -g $CHAINFORWARDFILTERUDP" && \
 		insert_rules "-A $CHAINFORWARDFILTER -p tcp -g $CHAINFORWARDFILTERTCP" && \
 		$IPT -A $CHAINFORWARDFILTER -p icmp -g $CHAINFORWARDFILTERICMP && \
@@ -528,12 +530,33 @@ set_rules()
 			insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" &
 		fi
 	done
-
+	
+	declare -A interfaceOKForwardIsolated=()
 	wait "${pidsIntm[@]}"
 	# En toute fin, on ajoute le liens vers le docker. Nous pouvons ainsi valider que nos connexions sont bonnes.
 	insert_rules "-A INPUT -j $CHAINDROPLOG" &
 	insert_rules_quietly "-t nat -A $CHAINPATMAIN -j DOCKER" &
-	/bin/bash /etc/firewall/firewall.rules.special &
+	/bin/bash /etc/firewall/firewall.rules.special
+	
+	for INTER in "${interfaceToGoOutSide[@]}"; do
+		IFS=';' read -r -a INTERC <<< $INTER
+		if [ ! -v interfaceOKForwardIsolated[${INTERC[0]}] ]; then
+			interfaceOKForwardIsolated[${INTERC[0]}]=0
+			# On souhaite que ces interfaces qui ont un acces externe puissent être isolées les une des autres par default
+			insert_rules "-A ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} -j DROP" &
+		fi
+	done
+	
+	for dnatPORT in ${IPAutorDnatPortTCP[@]} ${IPAutorDnatPortUDP[@]} ${internalDnatPortTCP[@]} ${internalDnatPortUDP[@]} ${localDnatPortTCP[@]} ${localDnatPortUDP[@]} ${dnatPortTCP[@]} ${dnatPortUDP[@]} ${WWdnatPortTCP[@]} ${WWdnatPortUDP[@]}; do
+		IFS=',' read -r -a dnatPORTC <<< $dnatPORT
+		if [ ! -v interfaceOKForwardIsolated[${dnatPORTC[1]}] ]; then
+			interfaceOKForwardIsolated[${dnatPORTC[1]}]=0
+			# On souhaite que ces interfaces qui ont un acces externe puissent être isolées les une des autres par default
+			insert_rules "-A ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} -j DROP" &
+		fi
+	done
+
+	# Il faudrait rajouter des reseaux isolés. Surtout de docker.
 	wait
 
 return 0
@@ -1114,12 +1137,12 @@ insert_rules_nat_forward_interface()
 	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}"
 	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}"
 	if [ ! -z "${INTERC[1]}" ]; then
-		$IPT -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 ! -o ${INTERC[0]} -m set --match-set ${INTERC[1]} src -m set ! --match-set ${INTERC[1]} dst -j ACCEPT & pids+=($!)
+		$IPT -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 -o $mainInter -m set --match-set ${INTERC[1]} src -m set ! --match-set ${INTERC[1]} dst -j ACCEPT & pids+=($!)
 		$IPT -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[1]} src -m set --match-set ${INTERC[1]} dst -m state --state ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
 	if [ ! -z "${INTERC[2]}" ]; then
 		# $IPT6 -t nat -A $CHAINPOSTROUTINGNAT ! -o ${INTERC[0]} -s ${INTERC[2]} ! -d ${INTERC[2]} -j MASQUERADE & pids+=($!)
-		$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 ! -o ${INTERC[0]} -m set --match-set ${INTERC[2]} src -m set ! --match-set ${INTERC[2]} dst -j ACCEPT & pids+=($!)
+		$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 -o $mainInter -m set --match-set ${INTERC[2]} src -m set ! --match-set ${INTERC[2]} dst -j ACCEPT & pids+=($!)
 		$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[2]} src -m set --match-set ${INTERC[2]} dst -m state --state ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
 	wait "${pids[@]}"
