@@ -1,4 +1,5 @@
 #! /bin/bash
+source /etc/firewall/firewall.tools
 IPT=/sbin/iptables
 IPT6=/sbin/ip6tables
 IPS=/sbin/ipset
@@ -6,6 +7,8 @@ ROUTE=/sbin/route
 SED=/bin/sed
 DUMPCO=/bin/ss
 DOCKER=/bin/docker
+IFCONFIG=/usr/sbin/ifconfig
+JQ=/usr/bin/jq
 
 IPSLISTBADIP="bad_ip"
 IPSLISTGOODIP="good_ip"
@@ -14,12 +17,18 @@ IPSINTERNALIPS="i"
 IPSPLEXIPS="plex_ip"
 IPS6BASIC="ipv6_cast"
 IPSDOH="doh_serv"
+IPSLOCALS="generic_local"
 
 mainInter="eth0"
 declare -a INTEROut=("eth0;192.168.0.0/24;fc00::/64")
 declare -a interfaceToGoOutSide=("virbr1;192.168.100.0/24;fe80:1::/64")
 declare -a internInterfaceHaveAccessAsLocal=("virbr1;192.168.100.0/24;fe80:1::/64")
 declare -A interfaceWithDHCP=( ["virbr1;192.168.100.0/24;fe80:1::/64"]=1 )
+declare -a interfaceWithNoRules=() # You need to add the rules, but the structure is create
+
+declare -a dockerNetworkWithInternalAccess=() # Equivalent of icc=True
+declare -a dockerNetworkWithInternetAccess=() # Open to the world
+declare -a dockerNetworkWithHostAccess=() # You need to add the rules, but the structure is create
 
 # List of trusted IPs
 declare -a IPAutor=()
@@ -66,4 +75,57 @@ declare -a WWDockerTCP=()
 declare -a WWDockerUDP=()
 
 declare -a blockedCountry="AE,BW,BY,BZ,CN,EG,HK,IL,JP,KR,KP,RU,SG,TN"
-declare -a blockedCountry2="UA,US"
+declare -a blockedCountry2="IN,TW,UA,US"
+
+CHAINIPALLOW="z-allow-ips"
+CHAINIPALLOWTCP="z-allow-ips-tcp"
+CHAINIPALLOWUDP="z-allow-ips-udp"
+
+CHAINICMPTRAFIC="z-icmp"
+
+CHAINDROPLOG="z-drop-log"
+CHAINDROPLOGSELECTOR="z-drop-log-select-trash"
+CHAINDROPLOGWITHOUTSELECTOR="z-drop-log-no-select-trash"
+
+CHAINPORTSENTRYOPENTCP="z-port-sentry-open-tcp"
+CHAINPORTSENTRYOPENUDP="z-port-sentry-open-udp"
+CHAINPORTSENTRYCLOSETCP="z-port-sentry-close-tcp"
+CHAINPORTSENTRYCLOSEUDP="z-port-sentry-close-udp"
+CHAINPORTSENTRYLOG="z-port-sentry-log"
+
+CHAINOPENSATE="z-open-state"
+CHAINOUTTRAFIC="z-output-rules"
+
+CHAINMAININTER="zz"
+
+CHAINMAINOUTINTERICMP="z-main-out-icmp"
+CHAINOPENDHCP="z-open-port-dhcp"
+
+CHAINOPENLOCALPORTTCP="z-open-local-tcp"
+CHAINOPENLOCALPORTUDP="z-open-local-udp"
+CHAINOPENLOCALPORTUDPDHCP="z-open-local-udp-dhcp"
+
+CHAINMAINOUTINTERCR="z-main-out-cr"
+CHAINOPENCRPORTTCP="z-main-out-cr-open-tcp"
+CHAINOPENCRPORTUDP="z-main-out-cr-open-udp"
+
+CHAINMAINOUTINTERWW="z-main-out-ww"
+CHAINOPENWWPORTTCP="z-main-out-ww-open-tcp"
+CHAINOPENWWPORTUDP="z-main-out-ww-open-udp"
+
+CHAINMAININTINTERICMP="z-main-inter-icmp"
+CHAINMAININTINTERTCP="z-main-inter-tcp"
+CHAINMAININTINTERUDP="z-main-inter-udp"
+CHAINMAININTINTERUDPDHCP="z-main-inter-udp-dhcp"
+
+CHAINDROPCAST="z-drop-cast"
+CHAINMAINOUTINTERDROPBADIPSRC="z-main-out-drop-bad-ip-src"
+CHAINMAINOUTINTERLOGBADIPDST="z-main-out-log-bad-ip-dst"
+CHAINMAINOUTINTERLOGBADIPDSTWB="z-main-out-log-dst-bad-ip"
+CHAINMAINOUTINTERLOGBADIPDSTWC="z-main-out-log-dst-crowd-ip"
+
+CHAINFORWARDFILTER="FORWARD-TRAFIC-FILTER"
+CHAINFORWARDFILTERTCP="FORWARD-TRAFIC-FILTER-TCP"
+CHAINFORWARDFILTERUDP="FORWARD-TRAFIC-FILTER-UDP"
+CHAINFORWARDFILTERICMP="FORWARD-TRAFIC-FILTER-ICM"
+CHAINFORWARDTRAFIC="FORWARD-TRAFIC"

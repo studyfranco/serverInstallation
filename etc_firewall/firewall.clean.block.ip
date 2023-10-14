@@ -1,6 +1,7 @@
 #! /bin/bash
 
 source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
 # On remove les route deny. Ce qui evite des problèmes
 for IP in "${IPAutor[@]}"; do
 	$ROUTE -n del $IP reject 2> /dev/null &
@@ -20,7 +21,7 @@ done
 
 cscli hub update
 
-cscli collections upgrade crowdsecurity/base-http-scenarios LePresidente/jellyseerr LePresidente/jellyfin crowdsecurity/iptables crowdsecurity/http-cve crowdsecurity/mariadb crowdsecurity/linux-lpe crowdsecurity/linux \
+cscli collections upgrade crowdsecurity/base-http-scenarios LePresidente/jellyseerr LePresidente/jellyfin crowdsecurity/iptables crowdsecurity/http-cve crowdsecurity/mariadb crowdsecurity/linux-lpe crowdsecurity/linux crowdsecurity/freeswitch \
 crowdsecurity/nginx-proxy-manager crowdsecurity/nginx crowdsecurity/modsecurity crowdsecurity/pgsql crowdsecurity/sshd schiz0phr3ne/sonarr crowdsecurity/smb schiz0phr3ne/radarr schiz0phr3ne/prowlarr crowdsecurity/suricata mstilkerich/bind9
 cscli scenarios upgrade LePresidente/ssh-bad-keyexchange-bf
 

@@ -1,3 +1,11 @@
 #! /bin/bash
 
 source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
+
+insert_rules_with_test_ok_ipv4 "-I $CHAINOPENWWPORTTCP 2 -p tcp --dport 32400 -m set --match-set $IPSPLEXIPS src -j ACCEPT" "" && \
+	insert_rules_with_test_ok_ipv6 "-I $CHAINOPENWWPORTTCP 2 -p tcp --dport 32400 -m set --match-set ${IPSPLEXIPS}6 src -j ACCEPT" "" && \
+	insert_rules_with_test_ok_ipv4 "-t nat -A ${CHAINOPENWWPORTTCP}-logs -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -g ${CHAINPATLOG}" "" && \
+	insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINOPENWWPORTTCP 2 -p tcp --dport 34212 -m set --match-set $IPSPLEXIPS src -j REDIRECT --to-port 32400" "" && \
+	insert_rules_with_test_ok_ipv6 "-t nat -A ${CHAINOPENWWPORTTCP}-logs -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -g ${CHAINPATLOG}" "" && \
+	insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINOPENWWPORTTCP 2 -p tcp --dport 34212 -m set --match-set ${IPSPLEXIPS}6 src -j REDIRECT --to-port 32400" ""

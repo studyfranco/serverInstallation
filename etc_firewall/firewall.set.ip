@@ -1,6 +1,7 @@
 #! /bin/bash
 
 source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
 
 add_doh()
 {

@@ -1,0 +1,133 @@
+#! /bin/bash
+IPT=/sbin/iptables
+IPT6=/sbin/ip6tables
+IPS=/sbin/ipset
+ROUTE=/sbin/route
+SED=/bin/sed
+DUMPCO=/bin/ss
+DOCKER=/bin/docker
+IFCONFIG=/usr/sbin/ifconfig
+JQ=/usr/bin/jq
+
+insert_rules() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid1
+	local pid2
+	$IPT $cmd_args & pid1=$!
+	$IPT6 $cmd_args & pid2=$!
+	wait $pid1 || echo "Bugged v4 $cmd_args"
+	wait $pid2 || echo "Bugged v6 $cmd_args"
+	return 0
+}
+
+insert_rules_quietly() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid1
+	local pid2
+	$IPT $cmd_args 2> /dev/null & pid1=$!
+	$IPT6 $cmd_args 2> /dev/null & pid2=$!
+	wait $pid1
+	wait $pid2
+	return 0
+}
+
+insert_rules_with_test_ok_ipv4()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local i=0
+	$IPT $cmd_args > /dev/null 2>&1
+	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+		((i++))
+		sleep 1
+		$IPT $cmd_args >/dev/null 2>&1
+	done
+	if [ $? -ne 0 ]; then
+		$IPT $cmd_args
+		echo "Bugged v4 $cmd_args"
+		if [ ! -z "$cmd_args_back" ]; then
+			$IPT $cmd_args_back
+		fi
+	fi
+	return 0
+}
+
+insert_rules_with_test_ok_ipv6()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local i=0
+	$IPT6 $cmd_args > /dev/null 2>&1
+	while [ $? -ne 0 ] && [ $i -le 5 ]; do
+		((i++))
+		sleep 1
+		$IPT6 $cmd_args >/dev/null 2>&1
+	done
+	if [ $? -ne 0 ]; then
+		$IPT6 $cmd_args
+		echo "Bugged v6 $cmd_args"
+		if [ ! -z "$cmd_args_back" ]; then
+			$IPT6 $cmd_args_back
+		fi
+	fi
+	return 0
+}
+
+insert_rules_with_test_ok()
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local cmd_args_back=$2
+	local pid1
+	local pid2
+	insert_rules_with_test_ok_ipv4 "$cmd_args" "$cmd_args_back" & pid1=$!
+	insert_rules_with_test_ok_ipv6 "$cmd_args" "$cmd_args_back" & pid2=$!
+	wait $pid1
+	wait $pid2
+	return 0
+}
+
+# Fonction pour vérifier si une chaîne de texte est une adresse IPv4 valide
+is_ipv4_net() {
+	local input="$1"
+	# Utilisation d'une expression régulière pour la validation
+	if [[ $input =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$ ]]; then
+		return 0 # C'est une adresse IPv4 valide
+	else
+		return 1 # Ce n'est pas une adresse IPv4 valide
+	fi
+}
+
+# Fonction pour vérifier si une chaîne de texte est une adresse IPv6 valide
+is_ipv6_net() {
+	local input="$1"
+	# Utilisation d'une expression régulière pour la validation
+	if [[ $input =~ ^[a-f0-9:]+/[0-9]+$ ]]; then
+		return 0 # C'est une adresse IPv6 valide
+	else
+		return 1 # Ce n'est pas une adresse IPv6 valide
+	fi
+}
+
+get_bridge_name_docker_network()
+{
+	local NETWORK="$1"
+	network_options=$(${DOCKER} network inspect -f '{{json .Options}}' "$NETWORK")
+	# Vérifier si "com.docker.network.bridge.name" est spécifié dans les options
+	if [[ "$network_options" == *"com.docker.network.bridge.name"* ]]; then
+		# Utiliser le nom de bridge spécifié dans les options
+		bridge_name=$(echo "$network_options" | ${JQ} -r '.["com.docker.network.bridge.name"]')
+	else
+		# Utiliser l'ID du réseau pour construire le nom du bridge
+		network_id=$(${DOCKER} network inspect -f '{{.Id}}' "$NETWORK")
+		bridge_name="br-${network_id:0:12}"
+	fi
+
+	# Vérifier si le bridge existe réellement
+	if ${IFCONFIG} | grep -q "$bridge_name"; then
+		return "$bridge_name"
+	else
+		return ""
+	fi
+}
