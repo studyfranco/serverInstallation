@@ -113,21 +113,21 @@ is_ipv6_net() {
 get_bridge_name_docker_network()
 {
 	local NETWORK="$1"
-	network_options=$(${DOCKER} network inspect -f '{{json .Options}}' "$NETWORK")
+	local network_options=$(${DOCKER} network inspect -f '{{json .Options}}' "${NETWORK}")
 	# Vérifier si "com.docker.network.bridge.name" est spécifié dans les options
 	if [[ "$network_options" == *"com.docker.network.bridge.name"* ]]; then
 		# Utiliser le nom de bridge spécifié dans les options
-		bridge_name=$(echo "$network_options" | ${JQ} -r '.["com.docker.network.bridge.name"]')
+		local bridge_name=$(echo "$network_options" | ${JQ} -r '.["com.docker.network.bridge.name"]')
 	else
 		# Utiliser l'ID du réseau pour construire le nom du bridge
-		network_id=$(${DOCKER} network inspect -f '{{.Id}}' "$NETWORK")
-		bridge_name="br-${network_id:0:12}"
+		local network_id=$(${DOCKER} network inspect -f '{{.Id}}' "${NETWORK}")
+		local bridge_name="br-${network_id:0:12}"
 	fi
 
 	# Vérifier si le bridge existe réellement
 	if ${IFCONFIG} | grep -q "$bridge_name"; then
-		return "$bridge_name"
+		echo "${bridge_name}"
 	else
-		return ""
+		echo ""
 	fi
 }
