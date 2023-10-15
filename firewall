@@ -25,9 +25,6 @@ declare -a SPECIALCHAINLIST=($CHAINIPALLOW
 				$CHAINOPENSATE $CHAINOUTTRAFIC $CHAINDROPLOG $CHAINDROPLOGSELECTOR $CHAINDROPLOGWITHOUTSELECTOR
 				$CHAINMAINOUTINTERDROPBADIPSRC $CHAINMAINOUTINTERLOGBADIPDST $CHAINMAINOUTINTERLOGBADIPDSTWB $CHAINMAINOUTINTERLOGBADIPDSTWC $CHAINDROPCAST)
 
-CHAINPATMAIN="z-redirect-main"
-CHAINPATLOG="z-redirect-log"
-CHAINPOSTROUTINGNAT="NAT-TRAFIC"
 declare -a NATCHAINLIST=(${CHAINPATMAIN} ${CHAINPOSTROUTINGNAT}
 				${CHAINIPALLOW} ${CHAINIPALLOWTCP} ${CHAINIPALLOWUDP} ${CHAINIPALLOWTCP}-logs ${CHAINIPALLOWUDP}-logs
 				${CHAINMAINOUTINTERCR} ${CHAINOPENCRPORTTCP} ${CHAINOPENCRPORTUDP} ${CHAINOPENCRPORTTCP}-logs ${CHAINOPENCRPORTUDP}-logs
@@ -684,12 +681,12 @@ delete_rules()
 			remove_chain "nat" "${CHAINMAININTER}-${NetworkInterface}" & pidsb+=($!)
 			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 			# Parcours de la liste des sous-réseaux dans la sortie JSON
-			for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-				if is_ipv4 "$subnet"; then
+				if is_ipv4_net "$subnet"; then
 					$IPT -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
 					$IPT -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT -t nat -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
-				elif is_ipv6 "$subnet"; then
+				elif is_ipv6_net "$subnet"; then
 					$IPT6 -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT6 -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
 					$IPT6 -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT6 -t nat -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
 				fi
@@ -707,7 +704,7 @@ delete_docker_rules()
 	declare -a pids=()
 	local NETWORK
 	declare -A interfaceDockerOKForward=()
-	for NETWORK in ${NETWORKS}; do
+	for NETWORK in ${NETWORKS[@]}; do
 		local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
 		if [ -n "${NetworkInterface}" ]; then
 			if [ ! -v interfaceDockerOKForward[${NetworkInterface}] ]; then
@@ -725,13 +722,13 @@ delete_docker_rules()
 				$IPT6 -D FORWARD -o ${NetworkInterface} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null & pids+=($!)
 				local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 				# Parcours de la liste des sous-réseaux dans la sortie JSON
-				for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+				for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 					# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-					if is_ipv4 "$subnet"; then
+					if is_ipv4_net "$subnet"; then
 						$IPT -D DOCKER-ISOLATION-STAGE-1 -i ${NetworkInterface} ! -d ${subnet} -j DROP 2> /dev/null & pids+=($!)
 						$IPT -D DOCKER-ISOLATION-STAGE-1 -o ${NetworkInterface} ! -s ${subnet} -j DROP 2> /dev/null & pids+=($!)
 						$IPT -D POSTROUTING ! -o ${NetworkInterface} -s ${subnet} -j MASQUERADE 2> /dev/null & pids+=($!)
-					elif is_ipv6 "$subnet"; then
+					elif is_ipv6_net "$subnet"; then
 						$IPT6 -D DOCKER-ISOLATION-STAGE-1 -i ${NetworkInterface} ! -d ${subnet} -j DROP 2> /dev/null & pids+=($!)
 						$IPT6 -D DOCKER-ISOLATION-STAGE-1 -o ${NetworkInterface} ! -s ${subnet} -j DROP 2> /dev/null & pids+=($!)
 						$IPT6 -D POSTROUTING ! -o ${NetworkInterface} -s ${subnet} -j MASQUERADE 2> /dev/null & pids+=($!)
@@ -828,12 +825,12 @@ flush_rules()
 			insert_rules_quietly "-t nat -F ${CHAINMAININTER}-${NetworkInterface}" & pids+=($!)
 			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 			# Parcours de la liste des sous-réseaux dans la sortie JSON
-			for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-				if is_ipv4 "$subnet"; then
+				if is_ipv4_net "$subnet"; then
 					$IPT -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
 					$IPT -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
-				elif is_ipv6 "$subnet"; then
+				elif is_ipv6_net "$subnet"; then
 					$IPT6 -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
 					$IPT6 -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
 				fi
@@ -1096,13 +1093,13 @@ insert_dnat_docker_inter_forward_main()
 	
 	local dnatPORT
 	local dnatPORTC
-	for dnatPORT in ${dnatPORTS}; do
+	for dnatPORT in ${dnatPORTS[@]}; do
 		IFS=',' read -r -a dnatPORTC <<< $dnatPORT
-		if [ ! -z "${containerDNATC[1]}" ]; then
+		if [ ! -z "${dnatPORTC[1]}" ]; then
 			if [ ! -v interfaceDnatOKForward[${dnatPORTC[1]}] ]; then
 				interfaceDnatOKForward[${dnatPORTC[1]}]=0
-				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]}" & pids+=($!)
-				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]}" & pids+=($!)
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" & pids+=($!)
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" & pids+=($!)
 			fi
 		fi
 	done
@@ -1249,20 +1246,20 @@ generate_set_ip_docker_net()
 	local NETWORK
 	declare -A netOK=()
 	declare -A interfaceDockerOKForward=()
-	for NETWORK in ${NETWORKS}; do
-		local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
+	for NETWORK in ${NETWORKS[@]}; do
+		local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 		if [ -n "${NetworkInterface}" ]; then
-			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
+			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
 			echo "Le nom du bridge de ${NETWORK} est ${NetworkInterface} et a pour parametres reseau ${json_NETWORK}"
 			# Parcours de la liste des sous-réseaux dans la sortie JSON
-			for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-				if is_ipv4 "$subnet"; then
+				if is_ipv4_net "$subnet"; then
 					if [ ! -v netOK[${subnet}] ]; then
 						netOK[${subnet}]=0
 						{ $IPS create ${subnet} hash:ip maxelem 999999999 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
 					fi
-				elif is_ipv6 "$subnet"; then
+				elif is_ipv6_net "$subnet"; then
 					if [ ! -v netOK[${subnet}] ]; then
 						netOK[${subnet}]=0
 						{ $IPS create ${subnet} hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
@@ -1272,7 +1269,7 @@ generate_set_ip_docker_net()
 				fi
 			done
 		else
-			echo "Le bridge n'existe pas ou n'est pas disponible."
+			echo "Le bridge de $NETWORK n'existe pas ou n'est pas disponible."
 		fi
 	done
 	wait "${pids[@]}"
@@ -1284,20 +1281,21 @@ insert_set_ip_docker_net()
 	local NETWORKS=("$@")
 	declare -a pids=()
 	local NETWORK
+	declare -A netOK=()
 	declare -A interfaceDockerOKForward=()
-	for NETWORK in ${NETWORKS}; do
+	for NETWORK in ${NETWORKS[@]}; do
 		local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
 		if [ -n "${NetworkInterface}" ]; then
 			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 			# Parcours de la liste des sous-réseaux dans la sortie JSON
-			for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-				if is_ipv4 "$subnet"; then
+				if is_ipv4_net "$subnet"; then
 					if [ ! -v netOK[${subnet}] ]; then
 						netOK[${subnet}]=0
 						$IPS add ${subnet} ${subnet} 2> /dev/null & pids+=($!)
 					fi
-				elif is_ipv6 "$subnet"; then
+				elif is_ipv6_net "$subnet"; then
 					if [ ! -v netOK[${subnet}] ]; then
 						netOK[${subnet}]=0
 						$IPS add ${subnet} ${subnet} 2> /dev/null & pids+=($!)
@@ -1316,8 +1314,8 @@ insert_network_docker_forward_main()
 	declare -a pids=()
 	local NETWORK
 	declare -A interfaceDockerOKForward=()
-	for NETWORK in ${NETWORKS}; do
-		local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
+	for NETWORK in ${NETWORKS[@]}; do
+		local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 		if [ -n "${NetworkInterface}" ]; then
 			if [ ! -v interfaceDockerOKForward[${NetworkInterface}] ]; then
 				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${NetworkInterface}" & pids+=($!)
@@ -1338,12 +1336,12 @@ insert_rules_nat_forward_docker_interface_out()
 	if [ -n "${NetworkInterface}" ]; then
 		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
-		for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-			if is_ipv4 "$subnet"; then
+			if is_ipv4_net "$subnet"; then
 				$IPT -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
 				$IPT -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
-			elif is_ipv6 "$subnet"; then
+			elif is_ipv6_net "$subnet"; then
 				$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
 				$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 			fi
@@ -1361,11 +1359,11 @@ insert_rules_docker_network_internal_access()
 	if [ -n "${NetworkInterface}" ]; then
 		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
-		for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-			if is_ipv4 "$subnet"; then
+			if is_ipv4_net "$subnet"; then
 				$IPT -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o ${NetworkInterface} -m set --match-set ${subnet} src -m set --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o ${NetworkInterface} -m set --match-set ${subnet} src -m set --match-set ${subnet} dst -j ACCEPT & pids+=($!)
-			elif is_ipv6 "$subnet"; then
+			elif is_ipv6_net "$subnet"; then
 				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o ${NetworkInterface} -m set --match-set ${subnet} src -m set --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o ${NetworkInterface} -m set --match-set ${subnet} src -m set --match-set ${subnet} dst -j ACCEPT & pids+=($!)
 			fi
 		done
@@ -1384,9 +1382,9 @@ insert_rules_docker_network_host_access()
 		insert_rules_quietly "-t nat -N ${CHAINMAININTER}-${NetworkInterface}"
 		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
-		for subnet in $(echo "$json_output" | ${JQ} -r '.[] | .Subnet'); do
+		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-			if is_ipv4 "$subnet"; then
+			if is_ipv4_net "$subnet"; then
 				$IPT -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
 				$IPT -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
 
@@ -1398,7 +1396,7 @@ insert_rules_docker_network_host_access()
 				$IPT -t nat -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT -t nat -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
 				
 				$IPT -t nat -C ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set $IPSLISTBADIP src -j RETURN 2> /dev/null || insert_rules_with_test_ok_ipv4 "-t nat -A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set $IPSLISTBADIP src -j RETURN" "" & pids+=($!)
-			elif is_ipv6 "$subnet"; then
+			elif is_ipv6_net "$subnet"; then
 				$IPT6 -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
 				$IPT6 -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT6 -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
 
