@@ -1249,25 +1249,28 @@ generate_set_ip_docker_net()
 	for NETWORK in ${NETWORKS[@]}; do
 		local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 		if [ -n "${NetworkInterface}" ]; then
-			local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
-			echo "Le nom du bridge de ${NETWORK} est ${NetworkInterface} et a pour parametres reseau ${json_NETWORK}"
-			# Parcours de la liste des sous-réseaux dans la sortie JSON
-			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
-				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
-				if is_ipv4_net "$subnet"; then
-					if [ ! -v netOK[${subnet}] ]; then
-						netOK[${subnet}]=0
-						{ $IPS create ${subnet} hash:ip maxelem 999999999 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
+			if [ ! -v interfaceDockerOKForward[${NetworkInterface}] ]; then
+				local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
+				echo "Le nom du bridge de ${NETWORK} est ${NetworkInterface} et a pour parametres reseau ${json_NETWORK}"
+				# Parcours de la liste des sous-réseaux dans la sortie JSON
+				for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
+					# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
+					if is_ipv4_net "$subnet"; then
+						if [ ! -v netOK[${subnet}] ]; then
+							netOK[${subnet}]=0
+							{ $IPS create ${subnet} hash:ip maxelem 999999999 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
+						fi
+					elif is_ipv6_net "$subnet"; then
+						if [ ! -v netOK[${subnet}] ]; then
+							netOK[${subnet}]=0
+							{ $IPS create ${subnet} hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
+						fi
+					else
+						echo "Network non reconnue : $subnet"
 					fi
-				elif is_ipv6_net "$subnet"; then
-					if [ ! -v netOK[${subnet}] ]; then
-						netOK[${subnet}]=0
-						{ $IPS create ${subnet} hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
-					fi
-				else
-					echo "Network non reconnue : $subnet"
-				fi
-			done
+				done
+				interfaceDockerOKForward[${NetworkInterface}]=0
+			fi
 		else
 			echo "Le bridge de $NETWORK n'existe pas ou n'est pas disponible."
 		fi
@@ -1339,11 +1342,11 @@ insert_rules_nat_forward_docker_interface_out()
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
 			if is_ipv4_net "$subnet"; then
-				$IPT -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
-				$IPT -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 			elif is_ipv6_net "$subnet"; then
-				$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
-				$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 			fi
 		done
 	fi
@@ -1385,29 +1388,31 @@ insert_rules_docker_network_host_access()
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
 			if is_ipv4_net "$subnet"; then
-				$IPT -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
-				$IPT -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
+				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+				$IPT -N ${chaintouse} 2> /dev/null
+				$IPT -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} 2> /dev/null || $IPT -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} & pids+=($!)
 
-				$IPT -C ${CHAINMAININTER}-${NetworkInterface}-${subnet} -p icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
-					$IPT -A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -p icmp -g $CHAINMAININTINTERICMP && \
-					insert_rules_with_test_ok_ipv4 "-A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set $IPSLISTBADIP src -j DROP" "" & pids+=($!)
+				$IPT -C ${chaintouse} -p icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
+					$IPT -A ${chaintouse} -p icmp -g $CHAINMAININTINTERICMP && \
+					insert_rules_with_test_ok_ipv4 "-A ${chaintouse} -m set --match-set $IPSLISTBADIP src -j DROP" "" & pids+=($!)
 				
-				$IPT -t nat -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
-				$IPT -t nat -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT -t nat -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
+				$IPT -t nat -N ${chaintouse} 2> /dev/null
+				$IPT -t nat -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} 2> /dev/null || $IPT -t nat -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} & pids+=($!)
 				
-				$IPT -t nat -C ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set $IPSLISTBADIP src -j RETURN 2> /dev/null || insert_rules_with_test_ok_ipv4 "-t nat -A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set $IPSLISTBADIP src -j RETURN" "" & pids+=($!)
+				$IPT -t nat -C ${chaintouse} -m set --match-set $IPSLISTBADIP src -j RETURN 2> /dev/null || insert_rules_with_test_ok_ipv4 "-t nat -A ${chaintouse} -m set --match-set $IPSLISTBADIP src -j RETURN" "" & pids+=($!)
 			elif is_ipv6_net "$subnet"; then
-				$IPT6 -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
-				$IPT6 -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT6 -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
+				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+				$IPT6 -N ${chaintouse} 2> /dev/null
+				$IPT6 -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} 2> /dev/null || $IPT6 -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} & pids+=($!)
 
-				$IPT6 -C ${CHAINMAININTER}-${NetworkInterface}-${subnet} -p ipv6-icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
-					$IPT6 -A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
-					insert_rules_with_test_ok_ipv6 "-A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" & pids+=($!)
+				$IPT6 -C ${chaintouse} -p ipv6-icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
+					$IPT6 -A ${chaintouse} -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
+					insert_rules_with_test_ok_ipv6 "-A ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" & pids+=($!)
 				
-				$IPT6 -t nat -N ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null
-				$IPT6 -t nat -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null || $IPT6 -t nat -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${CHAINMAININTER}-${NetworkInterface}-${subnet} & pids+=($!)
+				$IPT6 -t nat -N ${chaintouse} 2> /dev/null
+				$IPT6 -t nat -C ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} 2> /dev/null || $IPT6 -t nat -A ${CHAINMAININTER}-${NetworkInterface} -m set --match-set ${subnet} src -g ${chaintouse} & pids+=($!)
 
-				$IPT6 -t nat -C ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN 2> /dev/null || insert_rules_with_test_ok_ipv6 "-t nat -A ${CHAINMAININTER}-${NetworkInterface}-${subnet} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" & pids+=($!)
+				$IPT6 -t nat -C ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN 2> /dev/null || insert_rules_with_test_ok_ipv6 "-t nat -A ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" & pids+=($!)
 			fi
 		done
 		$IPT -C INPUT -i ${NetworkInterface} -g ${CHAINMAININTER}-${NetworkInterface} 2> /dev/null || insert_rules "-A INPUT -i ${NetworkInterface} -g ${CHAINMAININTER}-${NetworkInterface}" & pids+=($!)
@@ -1613,6 +1618,7 @@ install_paquets_needed()
 {
 	apt update
 	apt install -y software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 --no-install-recommends
+	#coreutils
 	apt install -y linux-headers-$(uname -r)
 }
 
