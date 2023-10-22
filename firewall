@@ -378,6 +378,7 @@ set_rules()
 	insert_rules "-I $CHAINFORWARDTRAFIC 1 -j $CHAINMAINOUTINTERLOGBADIPDST" &
 	insert_rules "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -j $CHAINDROPLOGWITHOUTSELECTOR" && \
 		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINDROPCAST" && \
+		insert_rules "-A $CHAINFORWARDFILTER -m conntrack ! --ctstate INVALID -m conntrack --ctstate DNAT -j RETURN" && \
 		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINMAINOUTINTERDROPBADIPSRC" && \
 		insert_rules_quietly "-A $CHAINFORWARDFILTER -j DOCKER-ISOLATION-STAGE-1" && \
 		$IPT -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
@@ -684,11 +685,13 @@ delete_rules()
 			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
 				if is_ipv4_net "$subnet"; then
-					$IPT -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
-					$IPT -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT -t nat -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
+					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+					$IPT -F ${chaintouse} 2> /dev/null && $IPT -X ${chaintouse} 2> /dev/null & pidsb+=($!)
+					$IPT -t nat -F ${chaintouse} 2> /dev/null && $IPT -t nat -X ${chaintouse} 2> /dev/null & pidsb+=($!)
 				elif is_ipv6_net "$subnet"; then
-					$IPT6 -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT6 -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
-					$IPT6 -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null && $IPT6 -t nat -X ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pidsb+=($!)
+					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+					$IPT6 -F ${chaintouse} 2> /dev/null && $IPT6 -X ${chaintouse} 2> /dev/null & pidsb+=($!)
+					$IPT6 -t nat -F ${chaintouse} 2> /dev/null && $IPT6 -t nat -X ${chaintouse} 2> /dev/null & pidsb+=($!)
 				fi
 			done
 		fi
@@ -828,11 +831,13 @@ flush_rules()
 			for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 				# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
 				if is_ipv4_net "$subnet"; then
-					$IPT -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
-					$IPT -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
+					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+					$IPT -F ${chaintouse} 2> /dev/null & pids+=($!)
+					$IPT -t nat -F ${chaintouse} 2> /dev/null & pids+=($!)
 				elif is_ipv6_net "$subnet"; then
-					$IPT6 -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
-					$IPT6 -t nat -F ${CHAINMAININTER}-${NetworkInterface}-${subnet} 2> /dev/null & pids+=($!)
+					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
+					$IPT6 -F ${chaintouse} 2> /dev/null & pids+=($!)
+					$IPT6 -t nat -F ${chaintouse} 2> /dev/null & pids+=($!)
 				fi
 			done
 		fi
@@ -1068,16 +1073,20 @@ insert_rules_list_docker_forward()
 		# "portIN,interOUT,container,portTarget"
 		IFS=',' read -r -a containerDNATC <<< $containerDNAT
 		if [ ! -z "${containerDNATC[1]}" ]; then
-			local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.IPAddress }}" ${containerDNATC[2]})
-			if [ ! -z "${ipv4}" ]; then
-				$IPT -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -m conntrack --ctstate DNAT -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -m conntrack --ctstate DNAT -j ACCEPT & pids+=($!)
-				$IPT -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
-			fi
-			local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.GlobalIPv6Address }}" ${containerDNATC[2]})
-			if [ ! -z "${ipv6}" ]; then
-				echo "${containerDNAT} ${ipv6}"
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -m conntrack --ctstate DNAT -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${containerDNATC[1]} ! -i ${containerDNATC[1]} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -m conntrack --ctstate DNAT -j ACCEPT & pids+=($!)
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${containerDNATC[1]} ! -o ${containerDNATC[1]} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+			local network_interface=$(get_bridge_name_docker_network "${containerDNATC[1]}")
+			if [ -n "${network_interface}" ]; then
+				local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
+				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.IPAddress }}" ${containerDNATC[2]})
+				if [ ! -z "${ipv4}" ]; then
+					$IPT -C ${CHAINFORWARDTRAFIC}-to-${network_interface} ! -i ${network_interface} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -m conntrack --ctstate DNAT -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-to-${network_interface} ! -i ${network_interface} -p $proto --dport ${containerDNATC[3]} -d ${ipv4} -m conntrack --ctstate DNAT -j ACCEPT & pids+=($!)
+					$IPT -C ${CHAINFORWARDTRAFIC}-from-${network_interface} ! -o ${network_interface} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT -A ${CHAINFORWARDTRAFIC}-from-${network_interface} ! -o ${network_interface} -p $proto --sport ${containerDNATC[3]} -s ${ipv4} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				fi
+				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${containerDNATC[1]}.GlobalIPv6Address }}" ${containerDNATC[2]})
+				if [ ! -z "${ipv6}" ]; then
+					echo "${containerDNAT} ${ipv6}"
+					$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${network_interface} ! -i ${network_interface} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -m conntrack --ctstate DNAT -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-to-${network_interface} ! -i ${network_interface} -p $proto --dport ${containerDNATC[3]} -d ${ipv6} -m conntrack --ctstate DNAT -j ACCEPT & pids+=($!)
+					$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${network_interface} ! -o ${network_interface} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${network_interface} ! -o ${network_interface} -p $proto --sport ${containerDNATC[3]} -s ${ipv6} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				fi
 			fi
 		fi
 		wait "${pids[@]}"
@@ -1335,9 +1344,9 @@ insert_rules_nat_forward_docker_interface_out()
 {
 	local NETWORK=$1 # network
 	declare -a pids=()
-	local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
+	local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 	if [ -n "${NetworkInterface}" ]; then
-		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
+		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
@@ -1358,9 +1367,9 @@ insert_rules_docker_network_internal_access()
 {
 	local NETWORK=$1 # network
 	declare -a pids=()
-	local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
+	local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 	if [ -n "${NetworkInterface}" ]; then
-		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
+		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
@@ -1379,11 +1388,11 @@ insert_rules_docker_network_host_access()
 {
 	local NETWORK=$1 # network
 	declare -a pids=()
-	local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
+	local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
 	if [ -n "${NetworkInterface}" ]; then
 		insert_rules_quietly "-N ${CHAINMAININTER}-${NetworkInterface}"
 		insert_rules_quietly "-t nat -N ${CHAINMAININTER}-${NetworkInterface}"
-		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "$NETWORK")
+		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${NETWORK}")
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
