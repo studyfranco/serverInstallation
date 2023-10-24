@@ -5,6 +5,7 @@ source /etc/firewall/firewall.tools
 
 add_doh()
 {
+	$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null
 	$IPS add $IPSDOH 8.8.4.4,443 2> /dev/null &
 	$IPS add $IPSDOH 8.8.8.8,443 2> /dev/null &
 	$IPS add $IPSDOH 149.112.112.112,443 2> /dev/null &
@@ -29,7 +30,12 @@ add_doh()
 	$IPS add $IPSDOH 185.228.169.168,443 2> /dev/null &
 	$IPS add $IPSDOH 185.228.168.10,443 2> /dev/null &
 	$IPS add $IPSDOH 185.228.169.11,443 2> /dev/null &
-	
+	wait
+}
+
+add_doh6()
+{
+	$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null
 	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/ipv6list.txt | while read -r line
 	do
 	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
@@ -41,24 +47,60 @@ add_doh()
 		fi
 	  fi
 	done
+	wait
 }
 
-{ $IPS destroy $IPSLISTGOODIP 2> /dev/null; $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; } & pid3=$!
-{ $IPS destroy ${IPSLISTGOODIP}6 2> /dev/null; $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid4=$!
+add_ipblock()
+{
+	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid7=$!
+	# Creation d'un groupe pour les IPV4s Bloques
+	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+	declare -a IPBlock
+	wait $pid7
+	for IP in "${IPBlock[@]}"; do
+		$IPS add $IPSLISTBADIP $IP 2> /dev/null && $DUMPCO -k src $IP > /dev/null 2>&1 && $DUMPCO -k dst $IP > /dev/null 2>&1 &
+	done
+	wait
+}
 
-{ $IPS destroy $IPSPLEXIPS 2> /dev/null; $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; } & pid5=$!
-{ $IPS destroy ${IPSPLEXIPS}6 2> /dev/null; $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid6=$!
+add_ipblock6()
+{
+	$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid8=$!
+	wait $pid8
+}
 
-{ $IPS destroy ${IPS6BASIC} 2> /dev/null; $IPS create ${IPS6BASIC} hash:ip maxelem 999999999 family inet6 2> /dev/null; } & pid1=$!
+add_iplocal()
+{
+	$IPS create ${IPSLOCALS} hash:net maxelem 999999999 2> /dev/null
+	$IPS add ${IPSLOCALS} 192.168.0.0/16 2> /dev/null &
+	$IPS add ${IPSLOCALS} 172.16.0.0/12 2> /dev/null &
+	$IPS add ${IPSLOCALS} 10.0.0.0/8 2> /dev/null &
+	wait
+}
 
-$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid7=$!
-$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid8=$!
+add_iplocal6()
+{
+	$IPS create ${IPSLOCALS}6 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS add ${IPSLOCALS}6 fe80::/10 2> /dev/null &
+	$IPS add ${IPSLOCALS}6 fc00::/7 2> /dev/null &
+	$IPS add ${IPSLOCALS}6 fd00::/8 2> /dev/null &
+	wait
+}
 
-$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null & pid9=$!
-$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null & pid10=$!
+add_doh &
+add_doh6 &
+add_ipblock &
+add_ipblock6 &
+add_iplocal &
+add_iplocal6 &
 
-$IPS create ${IPSLOCALS} hash:net maxelem 999999999 2> /dev/null & pid11=$!
-$IPS create ${IPSLOCALS}6 hash:net maxelem 999999999 family inet6 2> /dev/null & pid12=$!
+{ $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSLISTGOODIP 2> /dev/null; } & pid3=$!
+{ $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSLISTGOODIP}6 2> /dev/null; } & pid4=$!
+
+{ $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSPLEXIPS 2> /dev/null; } & pid5=$!
+{ $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSPLEXIPS}6 2> /dev/null; } & pid6=$!
+
+{ $IPS create ${IPS6BASIC} hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPS6BASIC} 2> /dev/null; } & pid1=$!
 
 wait $pid3
 # Ajout des IPV4s autorisé
@@ -71,23 +113,4 @@ wait $pid5
 $IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
 $IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &
 
-wait $pid9 $pid10
-add_doh &
-
-wait $pid11
-$IPS add ${IPSLOCALS} 192.168.0.0/16 2> /dev/null &
-$IPS add ${IPSLOCALS} 172.16.0.0/12 2> /dev/null &
-$IPS add ${IPSLOCALS} 10.0.0.0/8 2> /dev/null &
-wait $pid12
-$IPS add ${IPSLOCALS}6 fe80::/10 2> /dev/null &
-$IPS add ${IPSLOCALS}6 fc00::/7 2> /dev/null &
-$IPS add ${IPSLOCALS}6 fd00::/8 2> /dev/null &
-
-# Creation d'un groupe pour les IPV4s Bloques
-mapfile -t IPBlock < /etc/firewall/firewall.block.ip
-declare -a IPBlock
-wait $pid7
-for IP in "${IPBlock[@]}"; do
-	$IPS add $IPSLISTBADIP $IP 2> /dev/null && $DUMPCO -k src $IP > /dev/null 2>&1 && $DUMPCO -k dst $IP > /dev/null 2>&1 &
-done
 wait

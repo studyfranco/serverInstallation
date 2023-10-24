@@ -229,13 +229,13 @@ insert_rules_list_docker_ports_to_host()
 		# Parcours de la liste des sous-réseaux dans la sortie JSON
 		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
 			if is_ipv4_net "$subnet"; then
-				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${container_name}.IPAddress }}" ${container_name})
+				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
 					$IPT ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
 			elif is_ipv6_net "$subnet"; then
-				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${container_name}.GlobalIPv6Address }}" ${container_name})
+				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
 					$IPT6 ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
