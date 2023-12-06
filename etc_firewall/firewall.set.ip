@@ -30,18 +30,46 @@ add_doh()
 	$IPS add $IPSDOH 185.228.169.168,443 2> /dev/null &
 	$IPS add $IPSDOH 185.228.168.10,443 2> /dev/null &
 	$IPS add $IPSDOH 185.228.169.11,443 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.112,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.9,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.9,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.10,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.10,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.11,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.11,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.12,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.12,5053 2> /dev/null &
+	$IPS add $IPSDOH 9.9.9.13,5053 2> /dev/null &
+	$IPS add $IPSDOH 149.112.112.13,5053 2> /dev/null &
+	$IPS add $IPSDOH 167.114.220.125,453 2> /dev/null &
+	$IPS add $IPSDOH 149.56.228.45,453 2> /dev/null &
+	
+	local line
+	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/iplist.txt | while read -r line
+	do
+	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
+	  if [[ ! $line =~ ^\# ]]; then
+		# Vérifie si la ligne contient une adresse IPv6
+		if is_ipv4 "${line}"; then
+		  # Ajoute l'adresse IPv6 au tableau
+		  $IPS add ${IPSDOH} ${line},443 2> /dev/null &
+		fi
+	  fi
+	done
+
 	wait
 }
 
 add_doh6()
 {
 	$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null
+	local line
 	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/ipv6list.txt | while read -r line
 	do
 	  # Vérifie si la ligne n'est pas un commentaire (ne commence pas par #)
 	  if [[ ! $line =~ ^\# ]]; then
 		# Vérifie si la ligne contient une adresse IPv6
-		if [[ $line =~ ^[0-9a-fA-F\:]+$ ]]; then
+		if is_ipv6 "${line}"; then
 		  # Ajoute l'adresse IPv6 au tableau
 		  $IPS add ${IPSDOH}6 ${line},443 2> /dev/null &
 		fi
@@ -50,23 +78,62 @@ add_doh6()
 	wait
 }
 
+add_ipaut()
+{
+	{ $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSLISTGOODIP 2> /dev/null; }
+	# Ajout des IPV4s autorisé
+	local IP
+	for IP in "${IPAutor[@]}"; do
+		$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+	done
+	wait
+}
+
+add_ipaut6()
+{
+	{ $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSLISTGOODIP}6 2> /dev/null; }
+
+	wait
+}
+
 add_ipblock()
 {
-	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid7=$!
+	local pid
+	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid=$!
 	# Creation d'un groupe pour les IPV4s Bloques
-	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 	declare -a IPBlock
-	wait $pid7
+	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+	local IP
+	wait $pid
 	for IP in "${IPBlock[@]}"; do
-		$IPS add $IPSLISTBADIP $IP 2> /dev/null && $DUMPCO -k src $IP > /dev/null 2>&1 && $DUMPCO -k dst $IP > /dev/null 2>&1 &
+		add_ipblock_actions "${IP}" &
+		#sleep 0.001
 	done
+	wait
+}
+
+add_ipblock_actions()
+{
+	$IPS add $IPSLISTBADIP $1 2> /dev/null
+	$DUMPCO -k src $1 > /dev/null 2>&1 &
+	$DUMPCO -k dst $1 > /dev/null 2>&1 &
 	wait
 }
 
 add_ipblock6()
 {
-	$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid8=$!
-	wait $pid8
+	local pid
+	$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid=$!
+	wait $pid
+	wait
+}
+
+add_ipblock6_actions()
+{
+	$IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
+	$DUMPCO -6 -k src $1 > /dev/null 2>&1 &
+	$DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
+	wait
 }
 
 add_iplocal()
@@ -87,30 +154,35 @@ add_iplocal6()
 	wait
 }
 
+add_ip_plex()
+{
+	{ $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSPLEXIPS 2> /dev/null; }
+	{ $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSPLEXIPS}6 2> /dev/null; }
+	# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
+	$IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
+	$IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &
+	local line
+	curl -s https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt | while read -r line
+	do
+		if is_ipv4 "${line}"; then
+			$IPS add $IPSPLEXIPS "${line}" 2> /dev/null &
+		elif is_ipv6 "${line}"; then
+			$IPS add ${IPSPLEXIPS}6 "${line}" 2> /dev/null &
+		else
+			echo "IP non reconnue : ${line}"
+		fi
+	done
+	wait
+}
+
 add_doh &
 add_doh6 &
+add_ipaut &
+add_ipaut6 &
 add_ipblock &
 add_ipblock6 &
 add_iplocal &
 add_iplocal6 &
-
-{ $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSLISTGOODIP 2> /dev/null; } & pid3=$!
-{ $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSLISTGOODIP}6 2> /dev/null; } & pid4=$!
-
-{ $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSPLEXIPS 2> /dev/null; } & pid5=$!
-{ $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSPLEXIPS}6 2> /dev/null; } & pid6=$!
-
-{ $IPS create ${IPS6BASIC} hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPS6BASIC} 2> /dev/null; } & pid1=$!
-
-wait $pid3
-# Ajout des IPV4s autorisé
-for IP in "${IPAutor[@]}"; do
-	$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
-done
-
-wait $pid5
-# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
-$IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
-$IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &
+add_ip_plex &
 
 wait

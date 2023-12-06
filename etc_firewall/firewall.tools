@@ -88,26 +88,68 @@ insert_rules_with_test_ok()
 	return 0
 }
 
-# Fonction pour vérifier si une chaîne de texte est une adresse IPv4 valide
-is_ipv4_net() {
+# Fonction pour vérifier si une chaîne de texte est un reseau IPv4 valide
+is_ipv4_net()
+{
 	local input="$1"
 	# Utilisation d'une expression régulière pour la validation
 	if [[ $input =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]+$ ]]; then
+		return 0 # C'est une reseau IPv4 valide
+	else
+		return 1 # Ce n'est pas une reseau IPv4 valide
+	fi
+}
+
+# Fonction pour vérifier si une chaîne de texte est un adresse IPv4 valide
+is_ipv4()
+{
+	local input="$1"
+	# Utilisation d'une expression régulière pour la validation
+	if [[ $input =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
 		return 0 # C'est une adresse IPv4 valide
 	else
 		return 1 # Ce n'est pas une adresse IPv4 valide
 	fi
 }
 
-# Fonction pour vérifier si une chaîne de texte est une adresse IPv6 valide
-is_ipv6_net() {
+# Fonction pour vérifier si une chaîne de texte est un reseau IPv6 valide
+is_ipv6_net()
+{
 	local input="$1"
 	# Utilisation d'une expression régulière pour la validation
-	if [[ $input =~ ^[a-f0-9:]+/[0-9]+$ ]]; then
+	if [[ $input =~ ^[a-f0-9:]*:[a-f0-9:]*:[a-f0-9:]*/[0-9]+$ ]]; then
+		return 0 # C'est une reseau IPv6 valide
+	else
+		return 1 # Ce n'est pas une reseau IPv6 valide
+	fi
+}
+
+# Fonction pour vérifier si une chaîne de texte est un adresse IPv6 valide
+is_ipv6()
+{
+	local input="$1"
+	# Utilisation d'une expression régulière pour la validation
+	if [[ $input =~ ^[a-f0-9:]*:[a-f0-9:]*:[a-f0-9]$ ]]; then
 		return 0 # C'est une adresse IPv6 valide
 	else
 		return 1 # Ce n'est pas une adresse IPv6 valide
 	fi
+}
+
+close_traffic_list()
+{
+	declare -a pids=()
+	local args_src=$1 # -k src
+	shift
+	local args_dst=$1 # -6 -k dst
+	shift
+	local listIPs=("$@")
+	for IP in "${listIPs[@]}"; do
+		$DUMPCO $args_src $IP > /dev/null 2>&1 & pids+=($!)
+		$DUMPCO $args_dst $IP > /dev/null 2>&1 & pids+=($!)
+	done
+	wait "${pids[@]}"
+	return 0
 }
 
 get_bridge_name_docker_network()

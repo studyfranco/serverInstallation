@@ -15,7 +15,6 @@ IPSLISTGOODIP="good_ip"
 IPSLOCALIPS="l"
 IPSINTERNALIPS="i"
 IPSPLEXIPS="plex_ip"
-IPS6BASIC="ipv6_cast"
 IPSDOH="doh_serv"
 IPSLOCALS="generic_local"
 
