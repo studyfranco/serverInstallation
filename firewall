@@ -42,6 +42,7 @@ set_rules()
 	insert_rules "-P INPUT ACCEPT" && insert_rules "-F INPUT" && insert_rules "-I INPUT 1 -i lo -j ACCEPT" && insert_rules "-P INPUT DROP" & pid1=$!
 	insert_rules "-P FORWARD DROP" &
 	insert_rules "-I OUTPUT 1 -o lo -j ACCEPT" &
+	insert_rules "-P OUTPUT ACCEPT" &
 	
 	insert_rules_quietly "-t raw -N $CHAINICMPTRAFIC" && \
 		$IPT -t raw -A PREROUTING -p icmp -j $CHAINICMPTRAFIC && \
@@ -82,6 +83,8 @@ set_rules()
 	echo "Réglages pour la continuité de reception"
 	$IPT -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
 	$IPT6 -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
+	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dest -j ACCEPT" "" &
+	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dest -j ACCEPT" "" &
 	
 	# Creation des etats possibles
 	# insert_rules "-A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT" &
@@ -620,6 +623,7 @@ delete_rules()
 		insert_rules "-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" && \
 		insert_rules "-P INPUT DROP" & pids+=($!)
 	insert_rules "-P FORWARD DROP" & pids+=($!)
+	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -D POSTROUTING -j $CHAINPOSTROUTINGNAT" & pids+=($!)
@@ -753,6 +757,7 @@ flush_rules()
 		insert_rules "-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" && \
 		insert_rules "-P INPUT DROP" & pids+=($!)
 	insert_rules "-P FORWARD DROP" & pids+=($!)
+	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
 	# insert_rules "-t nat -D POSTROUTING -j $CHAINPOSTROUTINGNAT" & pids+=($!)
@@ -1595,40 +1600,24 @@ insert_rules_end_interfaces()
 	return 0
 }
 
-close_traffic_list()
-{
-	declare -a pids=()
-	local args_src=$1 # -k src
-	shift
-	local args_dst=$1 # -6 -k dst
-	shift
-	local listIPs=("$@")
-	for IP in "${listIPs[@]}"; do
-		$DUMPCO $args_src $IP > /dev/null 2>&1 & pids+=($!)
-		$DUMPCO $args_dst $IP > /dev/null 2>&1 & pids+=($!)
-	done
-	wait "${pids[@]}"
-	return 0
-}
-
-close_traffic()
-{
-	declare -a pids=()
-	# Suppression des connexion du groupe IPV4s Bloques
-	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
-	declare -a IPBlock
-	close_traffic_list "-k src" "-k dst" $IPBlock & pids+=($!)
-	
-	wait "${pids[@]}"
-	return 0
-}
-
 install_paquets_needed()
 {
+	export DEBIAN_FRONTEND=noninteractive
 	apt update
-	apt install -y software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 --no-install-recommends
+	apt install -y -o Dpkg::Options::="--force-confold" software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 net-tools ipset --no-install-recommends
 	#coreutils
-	apt install -y linux-headers-$(uname -r)
+	apt install -y -o Dpkg::Options::="--force-confold" linux-headers-$(uname -r)
+}
+
+update_crowdsec_rules()
+{
+	cscli hub update
+
+	cscli collections upgrade crowdsecurity/base-http-scenarios LePresidente/jellyseerr LePresidente/jellyfin crowdsecurity/iptables crowdsecurity/http-cve crowdsecurity/mariadb crowdsecurity/linux-lpe crowdsecurity/linux crowdsecurity/freeswitch \
+	crowdsecurity/nginx-proxy-manager crowdsecurity/nginx crowdsecurity/modsecurity crowdsecurity/pgsql crowdsecurity/sshd schiz0phr3ne/sonarr crowdsecurity/smb schiz0phr3ne/radarr schiz0phr3ne/prowlarr crowdsecurity/suricata mstilkerich/bind9
+	cscli scenarios upgrade LePresidente/ssh-bad-keyexchange-bf
+
+	systemctl reload crowdsec
 }
 
 command="$1"
@@ -1651,7 +1640,7 @@ case "$command" in
 
 		all-restart)
 				/bin/bash /etc/firewall/firewall.set.ip &
-				/bin/bash /etc/firewall/firewall.clean.block.ip &
+				update_crowdsec_rules &
 				flush_rules
 				set_rules
 				;;
@@ -1666,9 +1655,9 @@ case "$command" in
                 ;;
 				
 		computer-restart)
+				update_crowdsec_rules &
 				install_paquets_needed
 				/bin/bash /etc/firewall/firewall.set.ip &
-				/bin/bash /etc/firewall/firewall.clean.block.ip &
 				flush_rules
 				set_rules
 				;;
