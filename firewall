@@ -25,7 +25,7 @@ declare -a SPECIALCHAINLIST=($CHAINIPALLOW
 				$CHAINOPENSATE $CHAINOUTTRAFIC $CHAINDROPLOG $CHAINDROPLOGSELECTOR $CHAINDROPLOGWITHOUTSELECTOR
 				$CHAINMAINOUTINTERDROPBADIPSRC $CHAINMAINOUTINTERLOGBADIPDST $CHAINMAINOUTINTERLOGBADIPDSTWB $CHAINMAINOUTINTERLOGBADIPDSTWC $CHAINDROPCAST)
 
-declare -a NATCHAINLIST=(${CHAINPATMAIN} ${CHAINPOSTROUTINGNAT}
+declare -a NATCHAINLIST=(${CHAINPATMAIN}
 				${CHAINIPALLOW} ${CHAINIPALLOWTCP} ${CHAINIPALLOWUDP} ${CHAINIPALLOWTCP}-logs ${CHAINIPALLOWUDP}-logs
 				${CHAINMAINOUTINTERCR} ${CHAINOPENCRPORTTCP} ${CHAINOPENCRPORTUDP} ${CHAINOPENCRPORTTCP}-logs ${CHAINOPENCRPORTUDP}-logs
 				${CHAINMAINOUTINTERWW} ${CHAINOPENWWPORTTCP} ${CHAINOPENWWPORTUDP} ${CHAINOPENWWPORTTCP}-logs ${CHAINOPENWWPORTUDP}-logs
@@ -43,6 +43,9 @@ set_rules()
 	insert_rules "-P FORWARD DROP" &
 	insert_rules "-I OUTPUT 1 -o lo -j ACCEPT" &
 	insert_rules "-P OUTPUT ACCEPT" &
+
+	sysctl -w net.ipv4.conf.all.route_localnet=1 &
+	# sysctl -w net.ipv6.conf.all.route_localnet=1 & Pas d'équivalent en IPV6. La solution dans ce rare cas, serait d'utiliser un PROXY.
 	
 	insert_rules_quietly "-t raw -N $CHAINICMPTRAFIC" && \
 		$IPT -t raw -A PREROUTING -p icmp -j $CHAINICMPTRAFIC && \
@@ -65,12 +68,16 @@ set_rules()
 	generate_set_ip_docker_net ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} & pidsD+=($!)
 	insert_network_docker_forward_main ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} & pidsD+=($!)
 	delete_docker_rules ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} &
+	insert_rules_quietly "-t nat -D OUTPUT ! -d 127.0.0.0/8 -m addrtype --src-type local -j DOCKER" &
+	insert_rules_quietly "-D FORWARD -j DOCKER-ISOLATION-STAGE-1" &
 	
 	# On souhaite que nos VM puissent avoir internet rapidement. Il faut donc paramétrer rapidement de forwading
 	insert_rules "-t nat -I POSTROUTING 1 -o $mainInter -j MASQUERADE" && \
 	insert_rules "-t nat -I POSTROUTING 1 -m addrtype --dst-type MULTICAST -j RETURN" && insert_rules_quietly "-t nat -I POSTROUTING 1 -m addrtype --dst-type BROADCAST -j RETURN" && \
 	insert_rules "-t nat -I POSTROUTING 1 -m addrtype --src-type MULTICAST -j RETURN" && insert_rules_quietly "-t nat -I POSTROUTING 1 -m addrtype --src-type BROADCAST -j RETURN" && \
 	insert_rules "-t nat -I POSTROUTING 1 -m addrtype --dst-type local -j RETURN" && insert_rules "-t nat -I POSTROUTING 1 -m addrtype --src-type local -j RETURN" && \
+	insert_rules_with_test_ok_ipv4 "-t nat -I POSTROUTING 1 -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" "" && \
+	insert_rules_with_test_ok_ipv6 "-t nat -I POSTROUTING 1 -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" "" && \
 	insert_rules_with_test_ok_ipv4 "-t nat -I POSTROUTING 1 -d 224.0.0.0/24 -j RETURN" "" && insert_rules_with_test_ok_ipv4 "-t nat -I POSTROUTING 1 -d 255.255.255.255 -j RETURN" "" &
 
 	declare -a pidsToWaitForLinkFowardRules=()
@@ -83,8 +90,8 @@ set_rules()
 	echo "Réglages pour la continuité de reception"
 	$IPT -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
 	$IPT6 -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
-	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dest -j ACCEPT" "" &
-	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dest -j ACCEPT" "" &
+	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dst -j ACCEPT" "" &
+	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dst -j ACCEPT" "" &
 	
 	# Creation des etats possibles
 	# insert_rules "-A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT" &
@@ -97,8 +104,9 @@ set_rules()
 	# Après ce petit temps de configuration, nous pouvons rediriger les main
 	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
 	# On prépare déjà le cas des redirections pour l'interface local
-	$IPT -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINPATMAIN 2 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
-	$IPT6 -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINPATMAIN 2 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
+	insert_rules_with_test_ok "-t nat -A OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" "" &
+	insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINPATMAIN 1 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" & # $IPT -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW &&
+	insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINPATMAIN 1 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" & # $IPT6 -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && 
 	# Preparation du log pour la chain pat
 	insert_rules "-t nat -A ${CHAINPATLOG} -j NFLOG --nflog-threshold 5 --nflog-group 63" &
 
@@ -626,11 +634,13 @@ delete_rules()
 	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
-	insert_rules "-t nat -D POSTROUTING -j $CHAINPOSTROUTINGNAT" & pids+=($!)
 	insert_rules "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
 	insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
 
 	declare -a pidsb=()
+	
+	#$IPT -F FORWARD
+	insert_rules "-F OUTPUT" & pidsb+=($!)
 	
 	insert_rules "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" & pidsb+=($!)
 	insert_rules "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" & pidsb+=($!)
@@ -639,18 +649,17 @@ delete_rules()
 	insert_rules "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" & pidsb+=($!)
 	insert_rules "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" & pidsb+=($!)
 	insert_rules "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" & pidsb+=($!)
-	insert_rules "-t nat -D POSTROUTING -s 224.0.0.0/24 -j RETURN" & pidsb+=($!)
-	insert_rules "-t nat -D POSTROUTING -s 255.255.255.255 -j RETURN" & pidsb+=($!)
-
-	#$IPT -F FORWARD
-	insert_rules "-F OUTPUT" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s 224.0.0.0/24 -j RETURN" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s 255.255.255.255 -j RETURN" & pidsb+=($!)
 	
 	local pidS
 	local INTER
 	local INTERC
 	wait "${pids[@]}"
-	remove_chain_list "filter" $SPECIALCHAINLIST & pidS=$!
-	remove_chain_list "nat" $NATCHAINLIST & pidsb+=($!)
+	remove_chain_list "filter" ${SPECIALCHAINLIST[@]} & pidS=$!
+	remove_chain_list "nat" ${NATCHAINLIST[@]} & pidsb+=($!)
 	remove_chain "raw" $CHAINICMPTRAFIC & pidsb+=($!)
 	
 	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
@@ -760,7 +769,6 @@ flush_rules()
 	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
-	# insert_rules "-t nat -D POSTROUTING -j $CHAINPOSTROUTINGNAT" & pids+=($!)
 	insert_rules "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
 	insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
 	
@@ -771,9 +779,10 @@ flush_rules()
 	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" & pids+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" & pids+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" & pids+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" & pids+=($!)
-	insert_rules_quietly "-D FORWARD -j DOCKER-ISOLATION-STAGE-1" & pids+=($!)
 
 	#$IPT -F FORWARD
 	insert_rules "-F OUTPUT" & pids+=($!)
@@ -1236,7 +1245,6 @@ insert_rules_nat_forward_interface()
 	declare -a pids=()
 	local INTERC
 	IFS=';' read -r -a INTERC <<< $INTER
-	# $IPT -t nat -A $CHAINPOSTROUTINGNAT ! -o ${INTERC[0]} -s ${INTERC[1]} ! -d ${INTERC[1]} -j MASQUERADE & pids+=($!)
 	
 	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}"
 	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}"
@@ -1245,7 +1253,6 @@ insert_rules_nat_forward_interface()
 		$IPT -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[1]} src -m set --match-set ${INTERC[1]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
 	if [ ! -z "${INTERC[2]}" ]; then
-		# $IPT6 -t nat -A $CHAINPOSTROUTINGNAT ! -o ${INTERC[0]} -s ${INTERC[2]} ! -d ${INTERC[2]} -j MASQUERADE & pids+=($!)
 		$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 -o $mainInter -m set --match-set ${INTERC[2]} src -m set ! --match-set ${INTERC[2]} dst -j ACCEPT & pids+=($!)
 		$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[2]} src -m set --match-set ${INTERC[2]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
