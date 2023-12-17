@@ -45,7 +45,7 @@ set_rules()
 	insert_rules "-P OUTPUT ACCEPT" &
 
 	sysctl -w net.ipv4.conf.all.route_localnet=1 &
-	# sysctl -w net.ipv6.conf.all.route_localnet=1 & Pas d'équivalent en IPV6. La solution dans ce rare cas, serait d'utiliser un PROXY.
+	# sysctl -w net.ipv6.conf.all.route_localnet=1 & Pas d'équivalent en IPV6. La solution dans ce rare cas, serait d'utiliser un PROXY. Mais le plus simple est d'utiliser localhost 127.0.0.1
 	
 	insert_rules_quietly "-t raw -N $CHAINICMPTRAFIC" && \
 		$IPT -t raw -A PREROUTING -p icmp -j $CHAINICMPTRAFIC && \
@@ -88,14 +88,13 @@ set_rules()
 	# On autorise les connexions dont l état est RELATED ou ESTABLISHED des packets
 	# On fais en sorte que les IPs autorisé puisse enfin avoir de la connectivité
 	echo "Réglages pour la continuité de reception"
-	$IPT -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
-	$IPT6 -I INPUT 2 -j $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
+	$IPT -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
+	$IPT6 -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
 	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dst -j ACCEPT" "" &
 	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dst -j ACCEPT" "" &
 	
 	# Creation des etats possibles
-	# insert_rules "-A $CHAINOPENSATE -m state --state ESTABLISHED,RELATED -j ACCEPT" &
-	insert_rules "-A $CHAINOPENSATE -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT" &
+	insert_rules "-A $CHAINOPENSATE -j ACCEPT" &
 	
 	insert_rules "-A ${CHAINFORWARDTRAFIC} -j ${CHAINFORWARDTRAFIC}-from" && \
 		insert_rules "-A ${CHAINFORWARDTRAFIC} -j ${CHAINFORWARDTRAFIC}-to" &
@@ -104,7 +103,7 @@ set_rules()
 	# Après ce petit temps de configuration, nous pouvons rediriger les main
 	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
 	# On prépare déjà le cas des redirections pour l'interface local
-	insert_rules_with_test_ok "-t nat -A OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" "" &
+	insert_rules_with_test_ok "-t nat -I OUTPUT 1 -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" "" &
 	insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINPATMAIN 1 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" & # $IPT -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW &&
 	insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINPATMAIN 1 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" & # $IPT6 -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && 
 	# Preparation du log pour la chain pat
@@ -299,11 +298,9 @@ set_rules()
 		insert_rules "-A $CHAINMAININTINTERUDPDHCP -j $CHAINOPENLOCALPORTUDPDHCP" && \
 		insert_rules "-t nat -A $CHAINMAININTINTERUDPDHCP -j $CHAINOPENLOCALPORTUDPDHCP" &
 
-	$IPT -A $CHAINMAININTINTERICMP -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT && \
-		insert_rules_with_test_ok_ipv4 "-A $CHAINMAININTINTERICMP -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
+	insert_rules_with_test_ok_ipv4 "-A $CHAINMAININTINTERICMP -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
 		$IPT -A $CHAINMAININTINTERICMP -j ACCEPT &
-	$IPT6 -A $CHAINMAININTINTERICMP -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT && \
-		insert_rules_with_test_ok_ipv6 "-A $CHAINMAININTINTERICMP -p icmpv6 --icmpv6-type echo-request -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
+	insert_rules_with_test_ok_ipv6 "-A $CHAINMAININTINTERICMP -p icmpv6 --icmpv6-type echo-request -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
 		$IPT6 -A $CHAINMAININTINTERICMP -p ipv6-icmp -j ACCEPT &
 	
 	# Create subs rules outside network
@@ -335,14 +332,12 @@ set_rules()
 	
 	# On prepare les règles ICMP aussi
 	# Mais tester le state serait inutile ?
-	$IPT -A $CHAINMAINOUTINTERICMP -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT && \
-		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry -j DROP" "" && \
+	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry -j DROP" "" && \
 		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
 		$IPT -A $CHAINMAINOUTINTERICMP -j $CHAINMAINOUTINTERDROPBADIPSRC && \
 		$IPT -A $CHAINMAINOUTINTERICMP -j ACCEPT &
 	
-	$IPT6 -A $CHAINMAINOUTINTERICMP -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT && \
-		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry -j DROP" "" && \
+	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry -j DROP" "" && \
 		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
 		$IPT6 -A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -j $CHAINMAINOUTINTERDROPBADIPSRC && \
 		$IPT6 -A $CHAINMAINOUTINTERICMP -p ipv6-icmp -j ACCEPT &
@@ -387,7 +382,7 @@ set_rules()
 	# On configure le forward pour eviter de prendre trop de temps pour les VM
 	insert_rules "-I FORWARD 1 -j $CHAINFORWARDTRAFIC" && insert_rules "-I FORWARD 1 -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" &
 	insert_rules "-I $CHAINFORWARDTRAFIC 1 -j $CHAINMAINOUTINTERLOGBADIPDST" &
-	insert_rules "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -j $CHAINDROPLOGWITHOUTSELECTOR" && \
+	insert_rules "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -g $CHAINDROPLOGWITHOUTSELECTOR" && \
 		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINDROPCAST" && \
 		insert_rules "-A $CHAINFORWARDFILTER -m conntrack ! --ctstate INVALID -m conntrack --ctstate DNAT -j RETURN" && \
 		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINMAINOUTINTERDROPBADIPSRC" && \
@@ -427,7 +422,7 @@ set_rules()
 	insert_rules "-A $CHAINOUTTRAFIC -j $CHAINMAINOUTINTERLOGBADIPDST" && \
 		$IPT -A $CHAINOUTTRAFIC -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
 		$IPT6 -A $CHAINOUTTRAFIC -m set --match-set ${IPSDOH}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
-		insert_rules "-A $CHAINOUTTRAFIC -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT" & # insert_rules "-A $CHAINOUTTRAFIC -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT" && \
+		insert_rules "-A $CHAINOUTTRAFIC -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT" &
 
 	# Le plus simple est de faire l'appel avec une selection de tout ce qui est commun sur les DHCP
 	# "-p udp -s 0.0.0.0 --sport 68 --dport 67"
@@ -632,15 +627,14 @@ delete_rules()
 		insert_rules "-P INPUT DROP" & pids+=($!)
 	insert_rules "-P FORWARD DROP" & pids+=($!)
 	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
+	insert_rules "-F OUTPUT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
 	insert_rules "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
 	insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
+	insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" & pids+=($!)
 
 	declare -a pidsb=()
-	
-	#$IPT -F FORWARD
-	insert_rules "-F OUTPUT" & pidsb+=($!)
 	
 	insert_rules "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" & pidsb+=($!)
 	insert_rules "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" & pidsb+=($!)
@@ -767,6 +761,7 @@ flush_rules()
 		insert_rules "-P INPUT DROP" & pids+=($!)
 	insert_rules "-P FORWARD DROP" & pids+=($!)
 	insert_rules "-P OUTPUT ACCEPT" & pids+=($!)
+	insert_rules "-F OUTPUT" & pids+=($!)
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
 	insert_rules "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
@@ -783,9 +778,7 @@ flush_rules()
 	insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" & pids+=($!)
 	insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" & pids+=($!)
-
-	#$IPT -F FORWARD
-	insert_rules "-F OUTPUT" & pids+=($!)
+	insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" & pids+=($!)
 	
 	insert_rules_quietly "-t raw -F $CHAINICMPTRAFIC" & pids+=($!)
 	
