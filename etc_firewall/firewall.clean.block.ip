@@ -2,22 +2,58 @@
 
 source /etc/firewall/firewall.settings
 source /etc/firewall/firewall.tools
-# On remove les route deny. Ce qui evite des problèmes
-for IP in "${IPAutor[@]}"; do
-	$ROUTE -n del $IP reject 2> /dev/null &
-	$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
+
+declare -gA ip_in_list=()
+
+clean_hosts_deny()
+{
+	# Fichier hosts.deny
+	hosts_deny_file="/etc/hosts.deny"
+	# Vérifier si le fichier hosts.deny existe
+	# Parcourir le fichier hosts.deny
+	if [ -f "${hosts_deny_file}" ]; then
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			# Extraire l'adresse IP de la ligne
+			ip=$(echo "$line" | awk '{print $3}')
+			
+			# Vérifier si l'IP est dans ip_in_list
+			if [ -n "$ip" ] && [ -n "${ip_in_list[$ip]}" ]; then
+				# Supprimer la ligne du fichier hosts.deny
+				$SED -i "/^ALL: ${IP} : DENY/d" "${hosts_deny_file}" &
+			fi
+		done < "${hosts_deny_file}"
+	else
+		echo "Le fichier ${hosts_deny_file} n'existe pas."
+	fi
+}
+
+clean_route()
+{
+	# Exécute la commande route -n, filtre les lignes avec !H et extrait l'adresse IP
+	$ROUTE -n | grep '!H' | awk '{print $1}' | while read -r ip; do
+		# Tester si l'adresse IP est présente
+		if [[ -n "${ip_in_list[${ip}]}" ]]; then
+			$ROUTE -n del ${IP} reject 2> /dev/null &
+		fi
+	done
+}
+	
 	#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
 	#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
+
+# On remove les route deny. Ce qui evite des problèmes
+for IP in "${IPAutor[@]}"; do
+	ip_in_list[${IP}]=1
 done
 
 mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 declare -a IPBlock
 for IP in "${IPBlock[@]}"; do
-	$ROUTE -n del $IP reject 2> /dev/null &
-	$SED -i "/^ALL: ${IP} : DENY/d" "/etc/hosts.deny" &
-	#/usr/bin/fail2ban-client set sshd unbanip ${IP} 2> /dev/null &
-	#/usr/bin/fail2ban-client set recidive unbanip ${IP} 2> /dev/null &
+	ip_in_list[${IP}]=0
 done
+
+clean_hosts_deny &
+clean_route &
 
 cscli hub update
 
