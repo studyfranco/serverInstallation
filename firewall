@@ -57,13 +57,14 @@ set_rules()
 		insert_rules_quietly "-N $chain" & pidsI+=($!)
 	done
 
+	local pid2
+	generate_set_ip_net ${interfaceToGoOutSide[@]} ${internInterfaceHaveAccessAsLocal[@]} ${INTEROut[@]} ${interfaceWithNoRules[@]} & pid2=$!
+
 	declare -a pidsN=()
 	for chain in "${NATCHAINLIST[@]}"; do
 		insert_rules_quietly "-t nat -N $chain" & pidsN+=($!)
 	done
 
-	local pid2
-	generate_set_ip_net ${interfaceToGoOutSide[@]} ${internInterfaceHaveAccessAsLocal[@]} ${INTEROut[@]} & pid2=$!
 	declare -a pidsD=()
 	generate_set_ip_docker_net ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} & pidsD+=($!)
 	insert_network_docker_forward_main ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} & pidsD+=($!)
@@ -80,7 +81,12 @@ set_rules()
 	insert_rules_with_test_ok_ipv6 "-t nat -I POSTROUTING 1 -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" "" && \
 	insert_rules_with_test_ok_ipv4 "-t nat -I POSTROUTING 1 -d 224.0.0.0/24 -j RETURN" "" && insert_rules_with_test_ok_ipv4 "-t nat -I POSTROUTING 1 -d 255.255.255.255 -j RETURN" "" &
 
+	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dst -j ACCEPT" "" &
+	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dst -j ACCEPT" "" &
+
 	declare -a pidsToWaitForLinkFowardRules=()
+	declare -a pidsInt=()
+	declare -gA interfaceDHCP=()
 	local INTER
 	local INTERC
 	wait $pid1
@@ -90,42 +96,12 @@ set_rules()
 	echo "Réglages pour la continuité de reception"
 	$IPT -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
 	$IPT6 -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
-	insert_rules_with_test_ok_ipv4 "-I OUTPUT 2 -m set --match-set $IPSLISTGOODIP dst -j ACCEPT" "" &
-	insert_rules_with_test_ok_ipv6 "-I OUTPUT 2 -m set --match-set ${IPSLISTGOODIP}6 dst -j ACCEPT" "" &
 	
 	# Creation des etats possibles
 	insert_rules "-A $CHAINOPENSATE -j ACCEPT" &
 	
 	insert_rules "-A ${CHAINFORWARDTRAFIC} -j ${CHAINFORWARDTRAFIC}-from" && \
 		insert_rules "-A ${CHAINFORWARDTRAFIC} -j ${CHAINFORWARDTRAFIC}-to" &
-	
-	wait "${pidsN[@]}"
-	# Après ce petit temps de configuration, nous pouvons rediriger les main
-	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
-	# On prépare déjà le cas des redirections pour l'interface local
-	insert_rules_with_test_ok "-t nat -I OUTPUT 1 -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" "" &
-	insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINPATMAIN 1 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" & # $IPT -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW &&
-	insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINPATMAIN 1 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" & # $IPT6 -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && 
-	# Preparation du log pour la chain pat
-	insert_rules "-t nat -A ${CHAINPATLOG} -j NFLOG --nflog-threshold 5 --nflog-group 63" &
-
-	# On souhaite que nos VM puissent avoir internet rapidement. Il faut donc paramétrer rapidement de forwading
-	wait $pid2
-	for INTER in "${interfaceToGoOutSide[@]}"; do
-		# inter,net/mask,net6/mask
-		insert_rules_nat_forward_interface $INTER & pidsToWaitForLinkFowardRules+=($!)
-	done
-	insert_set_ip_net ${interfaceToGoOutSide[@]} ${internInterfaceHaveAccessAsLocal[@]} ${INTEROut[@]} &
-	
-	local NETWORK
-	wait "${pidsD[@]}"
-	for NETWORK in ${dockerNetworkWithInternetAccess[@]}; do
-		insert_rules_nat_forward_docker_interface_out ${NETWORK} &
-	done
-	for NETWORK in ${dockerNetworkWithInternalAccess[@]}; do
-		insert_rules_docker_network_internal_access ${NETWORK} &
-	done
-	insert_set_ip_docker_net ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} &
 
 	# On génère les règles de filtrage pour les interfaces vers l'exterieur
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERDROPBADIPSRC -m set --match-set $IPSLISTBADIP src -j DROP" "" &
@@ -144,6 +120,100 @@ set_rules()
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set ${IPSLISTBADIP}6 dst -g $CHAINMAINOUTINTERLOGBADIPDSTWB" "" &
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set crowdsec-blacklists dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" "" &
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set crowdsec6-blacklists dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" "" &
+	
+	# On configure le forward pour eviter de prendre trop de temps pour les VM
+	insert_rules "-I FORWARD 1 -j $CHAINFORWARDTRAFIC" && insert_rules "-I FORWARD 1 -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" &
+	insert_rules "-I $CHAINFORWARDTRAFIC 1 -j $CHAINMAINOUTINTERLOGBADIPDST" &
+	insert_rules "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -g $CHAINDROPLOGWITHOUTSELECTOR" && \
+		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINDROPCAST" && \
+		insert_rules "-A $CHAINFORWARDFILTER -m conntrack ! --ctstate INVALID -m conntrack --ctstate DNAT -j RETURN" && \
+		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINMAINOUTINTERDROPBADIPSRC" && \
+		insert_rules_quietly "-A $CHAINFORWARDFILTER -j DOCKER-ISOLATION-STAGE-1" && \
+		$IPT -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		$IPT6 -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		$IPT -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		$IPT6 -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
+		insert_rules "-A $CHAINFORWARDFILTER -p udp -g $CHAINFORWARDFILTERUDP" && \
+		insert_rules "-A $CHAINFORWARDFILTER -p tcp -g $CHAINFORWARDFILTERTCP" && \
+		$IPT -A $CHAINFORWARDFILTER -p icmp -g $CHAINFORWARDFILTERICMP && \
+		$IPT6 -A $CHAINFORWARDFILTER -p ipv6-icmp -g $CHAINFORWARDFILTERICMP &
+	
+	# Il n'est pas utile de forward les traffic vers les ports dhcp
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 67 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 68 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 547 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 546 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	# On souhaite flitrer les requetes DNS foward. Il serait bien pour notre propre protection.
+	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 9050 -g $CHAINDROPLOGWITHOUTSELECTOR" &
+	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type address-mask-request -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type timestamp-request -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type echo-request -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type echo-request -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type neighbour-advertisement -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type neighbour-solicitation -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type router-advertisement -g $CHAINDROPLOGWITHOUTSELECTOR &
+	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type router-solicitation -g $CHAINDROPLOGWITHOUTSELECTOR &
+
+	# On souhaite que nos VM puissent avoir internet rapidement. Il faut donc paramétrer rapidement de forwading
+	wait $pid2
+	for INTER in "${interfaceToGoOutSide[@]}"; do
+		# inter,net/mask,net6/mask
+		insert_rules_nat_forward_interface $INTER & pidsToWaitForLinkFowardRules+=($!)
+	done
+	
+	for INTER in ${interfaceWithNoRules[@]}; do
+		insert_rules_begin_interfaces $INTER & pidsInt+=($!)
+		insert_rules_forward_interface $INTER & pidsToWaitForLinkFowardRules+=($!)
+		if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
+			IFS=';' read -r -a INTERC <<< $INTER
+			interfaceDHCP[${INTERC[0]}]=1
+		fi
+	done
+	
+	insert_set_ip_net ${interfaceToGoOutSide[@]} ${internInterfaceHaveAccessAsLocal[@]} ${INTEROut[@]} ${interfaceWithNoRules[@]} &
+	
+	wait "${pidsN[@]}"
+	# Après ce petit temps de configuration, nous pouvons rediriger les main
+	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
+	# On prépare déjà le cas des redirections pour l'interface local
+	insert_rules_with_test_ok "-t nat -I OUTPUT 1 -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" "" &
+	insert_rules_with_test_ok_ipv4 "-t nat -I $CHAINPATMAIN 1 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" & # $IPT -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW &&
+	insert_rules_with_test_ok_ipv6 "-t nat -I $CHAINPATMAIN 1 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" & # $IPT6 -t nat -I $CHAINPATMAIN 1 -i lo -j $CHAINIPALLOW && 
+	# Preparation du log pour la chain pat
+	insert_rules "-t nat -A ${CHAINPATLOG} -j NFLOG --nflog-threshold 5 --nflog-group 63" &
+	
+	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
+		insert_rules_begin_interfaces $INTER && insert_rules_accept_trafic_local_interface $INTER & pidsInt+=($!)
+		if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
+			IFS=';' read -r -a INTERC <<< $INTER
+			interfaceDHCP[${INTERC[0]}]=1
+		fi
+	done
+
+	for INTER in "${INTEROut[@]}"; do
+		insert_rules_begin_interfaces $INTER && insert_rules_accept_trafic_local_out_interface $INTER & pidsInt+=($!)
+		if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
+			IFS=';' read -r -a INTERC <<< $INTER
+			interfaceDHCP[${INTERC[0]}]=1
+		fi
+	done
+	
+	local NETWORK
+	wait "${pidsD[@]}"
+	for NETWORK in ${dockerNetworkWithInternetAccess[@]}; do
+		insert_rules_nat_forward_docker_interface_out ${NETWORK} &
+	done
+	for NETWORK in ${dockerNetworkWithInternalAccess[@]}; do
+		insert_rules_docker_network_internal_access ${NETWORK} &
+	done
+	insert_set_ip_docker_net ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} &
+	insert_network_docker_forward_link ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]} &
 
 	# On configure les ouvertures de ports + redirection des ports
 	# insert_rules_list_redirections "-AI NAT" "-AI FILTER" "-m ipv4" "-m ipv6" "-j FILTER" "tcp/udp" ARRAY
@@ -192,17 +262,19 @@ set_rules()
 		insert_rules "-A $CHAINOPENWWPORTTCP -j $CHAINDROPLOG" &
 
 	# On oublie pas de Forward les redirections
-	insert_dnat_docker_inter_forward_main ${IPAutorDnatPortTCP[@]} ${IPAutorDockerTCP[@]} ${internalDnatPortTCP[@]} ${internalDockerTCP[@]} ${localDnatPortTCP[@]} ${localDockerTCP[@]} ${dnatPortTCP[@]} ${openDockerTCP[@]} ${WWdnatPortTCP[@]} ${WWDockerTCP[@]} && \
-		insert_rules_list_dnat_forward "tcp" "${IPAutorDnatPortTCP[@]}" && \
+	insert_docker_inter_forward_main  ${IPAutorDockerTCP[@]} ${internalDockerTCP[@]} ${localDockerTCP[@]} ${openDockerTCP[@]} ${WWDockerTCP[@]} && \
 		insert_rules_list_docker_forward "tcp" "${IPAutorDockerTCP[@]}" && \
-		insert_rules_list_dnat_forward "tcp" "${internalDnatPortTCP[@]}" && \
 		insert_rules_list_docker_forward "tcp" "${internalDockerTCP[@]}" && \
-		insert_rules_list_dnat_forward "tcp" "${localDnatPortTCP[@]}" && \
 		insert_rules_list_docker_forward "tcp" "${localDockerTCP[@]}" && \
-		insert_rules_list_dnat_forward "tcp" "${dnatPortTCP[@]}" && \
 		insert_rules_list_docker_forward "tcp" "${openDockerTCP[@]}" && \
-		insert_rules_list_dnat_forward "tcp" "${WWdnatPortTCP[@]}" 
-		insert_rules_list_docker_forward "tcp" "${WWDockerTCP[@]}" & pidsToWaitForLinkFowardRules+=($!)
+		insert_rules_list_docker_forward "tcp" "${WWDockerTCP[@]}" & pidsInt+=($!)
+		
+	insert_dnat_inter_forward_main ${IPAutorDnatPortTCP[@]} ${internalDnatPortTCP[@]} ${localDnatPortTCP[@]} ${dnatPortTCP[@]} ${WWdnatPortTCP[@]} && \
+		insert_rules_list_dnat_forward "tcp" "${IPAutorDnatPortTCP[@]}" && \
+		insert_rules_list_dnat_forward "tcp" "${internalDnatPortTCP[@]}" && \
+		insert_rules_list_dnat_forward "tcp" "${localDnatPortTCP[@]}" && \
+		insert_rules_list_dnat_forward "tcp" "${dnatPortTCP[@]}" && \
+		insert_rules_list_dnat_forward "tcp" "${WWdnatPortTCP[@]}" & pidsInt+=($!)
 
 	# UDP
 	insert_rules_list_ports "-t filter" "-A $CHAINOPENLOCALPORTUDP" "" "" "-j ACCEPT" "udp" "${localOpenPortsUDP[@]}" && \
@@ -263,17 +335,19 @@ set_rules()
 		insert_rules "-A $CHAINOPENWWPORTUDP -j $CHAINDROPLOG" &
 	
 	# On oublie pas de Forward les redirections
-	insert_dnat_docker_inter_forward_main ${IPAutorDnatPortUDP[@]} ${IPAutorDockerUDP[@]} ${internalDnatPortUDP[@]} ${internalDockerUDP[@]} ${localDnatPortUDP[@]} ${localDockerUDP[@]} ${dnatPortUDP[@]} ${openDockerUDP[@]} ${WWdnatPortUDP[@]} ${WWDockerUDP[@]} && \
-		insert_rules_list_dnat_forward "udp" "${IPAutorDnatPortUDP[@]}" && \
+	insert_docker_inter_forward_main  ${IPAutorDockerUDP[@]} ${internalDockerUDP[@]} ${localDockerUDP[@]} ${openDockerUDP[@]}  ${WWDockerUDP[@]}
 		insert_rules_list_docker_forward "udp" "${IPAutorDockerUDP[@]}" && \
-		insert_rules_list_dnat_forward "udp" "${internalDnatPortUDP[@]}" && \
 		insert_rules_list_docker_forward "udp" "${internalDockerUDP[@]}" && \
-		insert_rules_list_dnat_forward "udp" "${localDnatPortUDP[@]}" && \
 		insert_rules_list_docker_forward "udp" "${localDockerUDP[@]}" && \
-		insert_rules_list_dnat_forward "udp" "${dnatPortUDP[@]}" && \
 		insert_rules_list_docker_forward "udp" "${openDockerUDP[@]}" && \
-		insert_rules_list_dnat_forward "udp" "${WWdnatPortUDP[@]}" && \
-		insert_rules_list_docker_forward "udp" "${WWDockerUDP[@]}" & pidsToWaitForLinkFowardRules+=($!)
+		insert_rules_list_docker_forward "udp" "${WWDockerUDP[@]}" & pidsInt+=($!)
+	
+	insert_dnat_inter_forward_main ${IPAutorDnatPortUDP[@]} ${internalDnatPortUDP[@]} ${localDnatPortUDP[@]} ${dnatPortUDP[@]} ${WWdnatPortUDP[@]} && \
+		insert_rules_list_dnat_forward "udp" "${IPAutorDnatPortUDP[@]}" && \
+		insert_rules_list_dnat_forward "udp" "${internalDnatPortUDP[@]}" && \
+		insert_rules_list_dnat_forward "udp" "${localDnatPortUDP[@]}" && \
+		insert_rules_list_dnat_forward "udp" "${dnatPortUDP[@]}" && \
+		insert_rules_list_dnat_forward "udp" "${WWdnatPortUDP[@]}" & pidsInt+=($!)
 	
 	# INSERT RULES INTERNAL interfaces
 	insert_rules_list_ports "-t filter" "-A $CHAINMAININTINTERTCP" "" "" "-j ACCEPT" "tcp" "${internalOpenPortsTCP[@]}" && \
@@ -331,7 +405,6 @@ set_rules()
 		insert_rules "-t nat -A $CHAINMAINOUTINTERWW -p udp -g $CHAINOPENWWPORTUDP" &
 	
 	# On prepare les règles ICMP aussi
-	# Mais tester le state serait inutile ?
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry -j DROP" "" && \
 		insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERICMP -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
 		$IPT -A $CHAINMAINOUTINTERICMP -j $CHAINMAINOUTINTERDROPBADIPSRC && \
@@ -340,7 +413,7 @@ set_rules()
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry -j DROP" "" && \
 		insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -m geoip --src-cc $blockedCountry2 -j DROP" "" && \
 		$IPT6 -A $CHAINMAINOUTINTERICMP -p icmpv6 --icmpv6-type echo-request -j $CHAINMAINOUTINTERDROPBADIPSRC && \
-		$IPT6 -A $CHAINMAINOUTINTERICMP -p ipv6-icmp -j ACCEPT &
+		$IPT6 -A $CHAINMAINOUTINTERICMP -j ACCEPT &
 
 	# On doit aussi le configurer pour les ip allow
 	# On autorise nos IP mais il ne faut pas qu'elle puissent être ban par portsentry
@@ -378,45 +451,6 @@ set_rules()
 	
 	insert_rules "-A $CHAINDROPLOG -m conntrack ! --ctstate ESTABLISHED,RELATED -g $CHAINDROPLOGSELECTOR" && \
 		insert_rules "-A $CHAINDROPLOG -j DROP" &
-	
-	# On configure le forward pour eviter de prendre trop de temps pour les VM
-	insert_rules "-I FORWARD 1 -j $CHAINFORWARDTRAFIC" && insert_rules "-I FORWARD 1 -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" &
-	insert_rules "-I $CHAINFORWARDTRAFIC 1 -j $CHAINMAINOUTINTERLOGBADIPDST" &
-	insert_rules "-A $CHAINFORWARDFILTER -m addrtype --dst-type local -g $CHAINDROPLOGWITHOUTSELECTOR" && \
-		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINDROPCAST" && \
-		insert_rules "-A $CHAINFORWARDFILTER -m conntrack ! --ctstate INVALID -m conntrack --ctstate DNAT -j RETURN" && \
-		insert_rules "-A $CHAINFORWARDFILTER -j $CHAINMAINOUTINTERDROPBADIPSRC" && \
-		insert_rules_quietly "-A $CHAINFORWARDFILTER -j DOCKER-ISOLATION-STAGE-1" && \
-		$IPT -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
-		$IPT6 -A $CHAINFORWARDFILTER -m set --match-set ${IPSDOH}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
-		$IPT -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS} dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
-		$IPT6 -A $CHAINFORWARDFILTER -o $mainInter -m set --match-set ${IPSLOCALS}6 dst -g $CHAINDROPLOGWITHOUTSELECTOR && \
-		insert_rules "-A $CHAINFORWARDFILTER -p udp -g $CHAINFORWARDFILTERUDP" && \
-		insert_rules "-A $CHAINFORWARDFILTER -p tcp -g $CHAINFORWARDFILTERTCP" && \
-		$IPT -A $CHAINFORWARDFILTER -p icmp -g $CHAINFORWARDFILTERICMP && \
-		$IPT6 -A $CHAINFORWARDFILTER -p ipv6-icmp -g $CHAINFORWARDFILTERICMP &
-	
-	# Il n'est pas utile de forward les traffic vers les ports dhcp
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 67 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 68 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 547 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --sport 546 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	# On souhaite flitrer les requetes DNS foward. Il serait bien pour notre propre protection.
-	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 53 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 853 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERUDP -p udp --dport 5353 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	insert_rules "-A $CHAINFORWARDFILTERTCP -p tcp --dport 9050 -g $CHAINDROPLOGWITHOUTSELECTOR" &
-	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type address-mask-request -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type timestamp-request -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT -A $CHAINFORWARDFILTERICMP -p icmp --icmp-type echo-request -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type echo-request -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type neighbour-advertisement -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type neighbour-solicitation -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type router-advertisement -g $CHAINDROPLOGWITHOUTSELECTOR &
-	$IPT6 -A $CHAINFORWARDFILTERICMP -p ipv6-icmp --icmpv6-type router-solicitation -g $CHAINDROPLOGWITHOUTSELECTOR &
 
 	# Nous souhaitons log le trafic sortant vers des IPs problématiques # -m state --state NEW
 	insert_rules "-A $CHAINOUTTRAFIC -j $CHAINMAINOUTINTERLOGBADIPDST" && \
@@ -429,24 +463,6 @@ set_rules()
 	# Après ce n'est que la formalité de la destination
 	$IPT -A $CHAINOPENDHCP -p udp -d 255.255.255.255 -j ACCEPT &
 	$IPT -A $CHAINOPENDHCP -p udp -m addrtype --dst-type local -j ACCEPT &
-	
-	declare -a pidsInt=()
-	declare -gA interfaceDHCP=()
-	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
-		insert_rules_accept_trafic_local_interface $INTER & pidsInt+=($!)
-		if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
-			IFS=';' read -r -a INTERC <<< $INTER
-			interfaceDHCP[${INTERC[0]}]=1
-		fi
-	done
-
-	for INTER in "${INTEROut[@]}"; do
-		insert_rules_accept_trafic_local_out_interface $INTER & pidsInt+=($!)
-		if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
-			IFS=';' read -r -a INTERC <<< $INTER
-			interfaceDHCP[${INTERC[0]}]=1
-		fi
-	done
 
 	local dnatPORT
 	local dnatPORTC
@@ -462,7 +478,7 @@ set_rules()
 		fi
 	done
 	
-	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
+	for INTER in ${internInterfaceHaveAccessAsLocal[@]} ${interfaceWithNoRules[@]}; do
 		IFS=';' read -r -a INTERC <<< $INTER
 		if [ ! -v interfaceOK[${INTERC[0]}] ]; then
 			interfaceOK[${INTERC[0]}]=0
@@ -474,44 +490,16 @@ set_rules()
 		insert_rules_docker_network_host_access ${NETWORK} & pidsIntm+=($!)
 	done
 	
-	wait "${pidsToWaitForLinkFowardRules[@]}"
-	for INTER in "${interfaceToGoOutSide[@]}"; do
-		IFS=';' read -r -a INTERC <<< $INTER
-		if [ ! -v interfaceOKForward[${INTERC[0]}] ]; then
-			insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" &
-			insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" &
-			interfaceOKForward[${INTERC[0]}]=0
-		fi
-	done
-	
-	for dnatPORT in ${IPAutorDnatPortTCP[@]} ${IPAutorDnatPortUDP[@]} ${internalDnatPortTCP[@]} ${internalDnatPortUDP[@]} ${localDnatPortTCP[@]} ${localDnatPortUDP[@]} ${dnatPortTCP[@]} ${dnatPortUDP[@]} ${WWdnatPortTCP[@]} ${WWdnatPortUDP[@]} ${IPAutorDockerTCP[@]} ${IPAutorDockerUDP[@]} ${internalDockerTCP[@]} ${internalDockerUDP[@]} ${localDockerTCP[@]} ${localDockerUDP[@]} ${openDockerTCP[@]} ${openDockerUDP[@]} ${WWDockerTCP[@]} ${WWDockerUDP[@]}; do
-		IFS=',' read -r -a dnatPORTC <<< $dnatPORT
-		if [ ! -v interfaceOKForward[${dnatPORTC[1]}] ]; then
-			insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" &
-			insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" &
-			interfaceOKForward[${dnatPORTC[1]}]=0
-		fi
-	done
-	
-	for NETWORK in ${dockerNetworkWithInternalAccess[@]} ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithHostAccess[@]}; do
-		local NetworkInterface=$(get_bridge_name_docker_network "$NETWORK")
-		if [ -n "${NetworkInterface}" ]; then
-			if [ ! -v interfaceOKForward[${NetworkInterface}] ]; then
-				insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-from-${NetworkInterface}" &
-				insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-to-${NetworkInterface}" &
-				interfaceOKForward[${NetworkInterface}]=0
-			fi
-		fi
-	done
-	
 	declare -A interfaceOKForwardIsolated=()
+	wait "${pidsToWaitForLinkFowardRules[@]}"
+	insert_rules_forward_interface_link ${interfaceToGoOutSide[@]} ${interfaceWithNoRules[@]} &
 	wait "${pidsIntm[@]}"
 	/bin/bash /etc/firewall/firewall.rules.special
 	# En toute fin, on ajoute le liens vers le docker. Nous pouvons ainsi valider que nos connexions sont bonnes.
 	insert_rules "-A INPUT -j $CHAINDROPLOG" &
 	# insert_rules_quietly "-t nat -A $CHAINPATMAIN -j DOCKER" &
 	
-	for INTER in "${interfaceToGoOutSide[@]}"; do
+	for INTER in ${interfaceToGoOutSide[@]} ${interfaceWithNoRules[@]}; do
 		IFS=';' read -r -a INTERC <<< $INTER
 		if [ ! -v interfaceOKForwardIsolated[${INTERC[0]}] ]; then
 			interfaceOKForwardIsolated[${INTERC[0]}]=0
@@ -546,7 +534,7 @@ set_rules()
 
 	# Il faudrait rajouter des reseaux isolés. Surtout de docker.
 	wait
-
+	netfilter-persistent save
 return 0
 }
 
@@ -656,7 +644,7 @@ delete_rules()
 	remove_chain_list "nat" ${NATCHAINLIST[@]} & pidsb+=($!)
 	remove_chain "raw" $CHAINICMPTRAFIC & pidsb+=($!)
 	
-	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
+	for INTER in ${internInterfaceHaveAccessAsLocal[@]} ${interfaceWithNoRules[@]}; do
 		remove_chain_interface_network "$INTER" & pidsb+=($!)
 	done
 
@@ -665,7 +653,7 @@ delete_rules()
 	done
 	
 	wait $pidS
-	for INTER in "${interfaceToGoOutSide[@]}"; do
+	for INTER in ${interfaceToGoOutSide[@]} ${interfaceWithNoRules[@]}; do
 		IFS=';' read -r -a INTERC <<< $INTER
 		remove_chain "filter" "${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" & pidsb+=($!)
 		remove_chain "filter" "${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" & pidsb+=($!)
@@ -695,16 +683,26 @@ delete_rules()
 					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
 					$IPT -F ${chaintouse} 2> /dev/null && $IPT -X ${chaintouse} 2> /dev/null & pidsb+=($!)
 					$IPT -t nat -F ${chaintouse} 2> /dev/null && $IPT -t nat -X ${chaintouse} 2> /dev/null & pidsb+=($!)
+					$IPS flush ${subnet} 2> /dev/null && $IPS destroy ${subnet} 2> /dev/null & pidsb+=($!)
 				elif is_ipv6_net "$subnet"; then
 					local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${NetworkInterface}-${subnet}")
 					$IPT6 -F ${chaintouse} 2> /dev/null && $IPT6 -X ${chaintouse} 2> /dev/null & pidsb+=($!)
 					$IPT6 -t nat -F ${chaintouse} 2> /dev/null && $IPT6 -t nat -X ${chaintouse} 2> /dev/null & pidsb+=($!)
+					$IPS flush ${subnet} 2> /dev/null && $IPS destroy ${subnet} 2> /dev/null & pidsb+=($!)
 				fi
 			done
 		fi
 	done
 	
+	$IPS flush $IPSDOH 2> /dev/null && $IPS destroy $IPSDOH 2> /dev/null & pidsb+=($!)
+	$IPS flush ${IPSDOH}6 2> /dev/null && $IPS destroy ${IPSDOH}6 2> /dev/null & pidsb+=($!)
+	$IPS flush $IPSLISTGOODIP 2> /dev/null && $IPS destroy $IPSLISTGOODIP 2> /dev/null & pidsb+=($!)
+	$IPS flush ${IPSLISTGOODIP}6 2> /dev/null && $IPS destroy ${IPSLISTGOODIP}6 2> /dev/null & pidsb+=($!)
+	$IPS flush $IPSLISTBADIP 2> /dev/null && $IPS destroy $IPSLISTBADIP 2> /dev/null & pidsb+=($!)
+	$IPS flush ${IPSLISTBADIP}6 2> /dev/null && $IPS destroy ${IPSLISTBADIP}6 2> /dev/null & pidsb+=($!)
+	
 	wait "${pidsb[@]}"
+	netfilter-persistent save
 	return 0
 }
 
@@ -791,7 +789,7 @@ flush_rules()
 	
 	local INTER
 	local INTERC
-	for INTER in "${internInterfaceHaveAccessAsLocal[@]}"; do
+	for INTER in ${internInterfaceHaveAccessAsLocal[@]} ${interfaceWithNoRules[@]}; do
 		IFS=';' read -r -a INTERC <<< $INTER
 		insert_rules_quietly "-F ${CHAINMAININTER}-${INTERC[0]}" & pids+=($!)
 		$IPT -F ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null & pids+=($!)
@@ -811,7 +809,7 @@ flush_rules()
 		$IPT6 -t nat -F ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null & pids+=($!)
 	done
 	
-	for INTER in "${interfaceToGoOutSide[@]}"; do
+	for INTER in ${interfaceToGoOutSide[@]} ${interfaceWithNoRules[@]}; do
 		IFS=';' read -r -a INTERC <<< $INTER
 		insert_rules_quietly "-F ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" & pids+=($!)
 		insert_rules_quietly "-F ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" & pids+=($!)
@@ -1019,6 +1017,32 @@ insert_rules_list_dnat_forward()
 	return 0
 }
 
+insert_dnat_inter_forward_main()
+{
+	local dnatPORTS=("$@") # "portIN,interOUT,?,?"
+	declare -a pids=()
+	declare -A interfaceDnatOKForward=()
+	
+	local dnatPORT
+	local dnatPORTC
+	for dnatPORT in ${dnatPORTS[@]}; do
+		IFS=',' read -r -a dnatPORTC <<< $dnatPORT
+		if [ ! -z "${dnatPORTC[1]}" ]; then
+			if [ ! -v interfaceDnatOKForward[${dnatPORTC[1]}] ]; then
+				interfaceDnatOKForward[${dnatPORTC[1]}]=0
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" && \
+				$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" & pids+=($!)
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" && \
+				$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" & pids+=($!)
+			fi
+		fi
+	done
+	wait "${pids[@]}"
+	return 0
+}
+
 # insert_rules_list_docker "-AI" "-m ipv4" "-m ipv6" "tcp/udp" ARRAY
 insert_rules_list_docker()
 {
@@ -1101,7 +1125,7 @@ insert_rules_list_docker_forward()
 	return 0
 }
 
-insert_dnat_docker_inter_forward_main()
+insert_docker_inter_forward_main()
 {
 	local dnatPORTS=("$@") # "portIN,interOUT,?,?"
 	declare -a pids=()
@@ -1112,10 +1136,15 @@ insert_dnat_docker_inter_forward_main()
 	for dnatPORT in ${dnatPORTS[@]}; do
 		IFS=',' read -r -a dnatPORTC <<< $dnatPORT
 		if [ ! -z "${dnatPORTC[1]}" ]; then
-			if [ ! -v interfaceDnatOKForward[${dnatPORTC[1]}] ]; then
-				interfaceDnatOKForward[${dnatPORTC[1]}]=0
-				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" & pids+=($!)
-				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" & pids+=($!)
+			local network_interface=$(get_bridge_name_docker_network "${dnatPORTC[1]}")
+			if [ ! -v interfaceDnatOKForward[${network_interface}] ]; then
+				interfaceDnatOKForward[${network_interface}]=0
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${network_interface}"  && \
+				$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${network_interface} -g ${CHAINFORWARDTRAFIC}-from-${network_interface} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${network_interface} -g ${CHAINFORWARDTRAFIC}-from-${network_interface}" & pids+=($!)
+				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${network_interface}" && \
+				$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${network_interface} -g ${CHAINFORWARDTRAFIC}-to-${network_interface} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${network_interface} -g ${CHAINFORWARDTRAFIC}-to-${network_interface}" & pids+=($!)
 			fi
 		fi
 	done
@@ -1232,6 +1261,43 @@ insert_set_ip_net()
 	return 0
 }
 
+insert_rules_forward_interface()
+{
+	local INTER=$1 # inter,net/mask,net6/mask
+	declare -a pids=()
+	local INTERC
+	IFS=';' read -r -a INTERC <<< $INTER
+	
+	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" & pids+=($!)
+	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" & pids+=($!)
+	wait "${pids[@]}"
+	return 0
+}
+
+insert_rules_forward_interface_link()
+{
+	local INTERS=("$@")
+	declare -a pids=()
+	declare -A interfaceOKForward=()
+	
+	local INTER # inter,net/mask,net6/mask
+	local INTERC
+	
+	for INTER in ${INTERS[@]}; do
+		IFS=';' read -r -a INTERC <<< $INTER
+		if [ ! -v interfaceOKForward[${INTERC[0]}] ]; then
+			$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 2> /dev/null || \
+			insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" & pids+=($!)
+			$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 2> /dev/null || \
+			insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" & pids+=($!)
+			interfaceOKForward[${INTERC[0]}]=0
+		fi
+	done
+	
+	wait "${pids[@]}"
+	return 0
+}
+
 insert_rules_nat_forward_interface()
 {
 	local INTER=$1 # inter,net/mask,net6/mask
@@ -1243,11 +1309,11 @@ insert_rules_nat_forward_interface()
 	insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}"
 	if [ ! -z "${INTERC[1]}" ]; then
 		$IPT -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 -o $mainInter -m set --match-set ${INTERC[1]} src -m set ! --match-set ${INTERC[1]} dst -j ACCEPT & pids+=($!)
-		$IPT -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[1]} src -m set --match-set ${INTERC[1]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+		$IPT -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 -i $mainInter -m set ! --match-set ${INTERC[1]} src -m set --match-set ${INTERC[1]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
 	if [ ! -z "${INTERC[2]}" ]; then
 		$IPT6 -I ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 1 -o $mainInter -m set --match-set ${INTERC[2]} src -m set ! --match-set ${INTERC[2]} dst -j ACCEPT & pids+=($!)
-		$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 ! -i ${INTERC[0]} -m set ! --match-set ${INTERC[2]} src -m set --match-set ${INTERC[2]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+		$IPT6 -I ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 1 -i $mainInter -m set ! --match-set ${INTERC[2]} src -m set --match-set ${INTERC[2]} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 	fi
 	wait "${pids[@]}"
 	return 0
@@ -1345,6 +1411,28 @@ insert_network_docker_forward_main()
 	return 0
 }
 
+insert_network_docker_forward_link()
+{
+	local NETWORKS=("$@")
+	declare -a pids=()
+	local NETWORK
+	declare -A interfaceDockerOKForward=()
+	for NETWORK in ${NETWORKS[@]}; do
+		local NetworkInterface=$(get_bridge_name_docker_network "${NETWORK}")
+		if [ -n "${NetworkInterface}" ]; then
+			if [ ! -v interfaceDockerOKForward[${NetworkInterface}] ]; then
+				$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-from-${NetworkInterface}" & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 2> /dev/null || \
+				insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${NetworkInterface} -g ${CHAINFORWARDTRAFIC}-to-${NetworkInterface}" & pids+=($!)
+				interfaceDockerOKForward[${NetworkInterface}]=0
+			fi
+		fi
+	done
+	wait "${pids[@]}"
+	return 0
+}
+
 insert_rules_nat_forward_docker_interface_out()
 {
 	local NETWORK=$1 # network
@@ -1357,10 +1445,10 @@ insert_rules_nat_forward_docker_interface_out()
 			# Vérifiez si l'adresse est IPv4 ou IPv6 et effectuez le traitement approprié
 			if is_ipv4_net "$subnet"; then
 				$IPT -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
-				$IPT -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				$IPT -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} -i $mainInter -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 -i $mainInter -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 			elif is_ipv6_net "$subnet"; then
 				$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-from-${NetworkInterface} 1 -o $mainInter -m set --match-set ${subnet} src -m set ! --match-set ${subnet} dst -j ACCEPT & pids+=($!)
-				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 ! -i ${NetworkInterface} -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
+				$IPT6 -C ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} -i $mainInter -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2> /dev/null || $IPT6 -I ${CHAINFORWARDTRAFIC}-to-${NetworkInterface} 1 -i $mainInter -m set ! --match-set ${subnet} src -m set --match-set ${subnet} dst -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT & pids+=($!)
 			fi
 		done
 	fi
@@ -1437,6 +1525,66 @@ insert_rules_docker_network_host_access()
 }
 
 # Rules INPUT
+insert_rules_begin_interfaces()
+{
+	local INTER=$1 # inter,net/mask,net6/mask
+	declare -a pids=()
+	local INTERC
+	IFS=';' read -r -a INTERC <<< $INTER
+	
+	if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
+		echo "Create the rules for internal interface $INTER with DHCP open"
+	else
+		echo "Create the rules for internal interface $INTER with DHCP close"
+	fi
+	
+	insert_rules_quietly "-N ${CHAINMAININTER}-${INTERC[0]}"
+	insert_rules_quietly "-t nat -N ${CHAINMAININTER}-${INTERC[0]}"
+	
+	if [ ! -z "${INTERC[1]}" ]; then
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}")
+		# On utilise un set des IPS car plus rapide pour le traitement
+		$IPT -N ${chaintouse} 2> /dev/null
+
+		$IPT -C ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${chaintouse} 2> /dev/null || \
+			$IPT -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${chaintouse} & pids+=($!)
+		
+		$IPT -C ${chaintouse} -p icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
+			$IPT -A ${chaintouse} -p icmp -g $CHAINMAININTINTERICMP && \
+			insert_rules_with_test_ok_ipv4 "-A ${chaintouse} -m set --match-set $IPSLISTBADIP src -j DROP" "" & pids+=($!)
+		
+		$IPT -t nat -N ${chaintouse} 2> /dev/null
+		
+		$IPT -t nat -C ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${chaintouse} 2> /dev/null || \
+			$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${chaintouse} & pids+=($!)
+		
+		$IPT -t nat -C ${chaintouse} -m set --match-set $IPSLISTBADIP src -j RETURN 2> /dev/null || \
+			insert_rules_with_test_ok_ipv4 "-t nat -A ${chaintouse} -m set --match-set $IPSLISTBADIP src -j RETURN" "" & pids+=($!)
+	fi
+	if [ ! -z "${INTERC[2]}" ]; then
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}")
+		# On utilise un set des IPS car plus rapide pour le traitement
+		$IPT6 -N ${chaintouse} 2> /dev/null
+
+		$IPT6 -C ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} 2> /dev/null || \
+			$IPT6 -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} & pids+=($!)
+		
+		$IPT6 -C ${chaintouse} -p ipv6-icmp -g $CHAINMAININTINTERICMP 2> /dev/null || \
+			$IPT6 -A ${chaintouse} -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
+			insert_rules_with_test_ok_ipv6 "-A ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" & pids+=($!)
+	
+		$IPT6 -t nat -N ${chaintouse} 2> /dev/null
+		
+		$IPT6 -t nat -C ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} 2> /dev/null || \
+			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${chaintouse} & pids+=($!)
+		
+		$IPT -t nat -C ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN 2> /dev/null || \
+			insert_rules_with_test_ok_ipv6 "-t nat -A ${chaintouse} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" & pids+=($!)
+	fi
+	wait "${pids[@]}"
+	return 0
+}
+
 insert_rules_accept_trafic_local_interface()
 {
 	local INTER=$1 # inter,net/mask,net6/mask
@@ -1446,54 +1594,29 @@ insert_rules_accept_trafic_local_interface()
 	
 	if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
 		local CHAINUDPUSE=$CHAINMAININTINTERUDPDHCP
-		echo "Create the rules for internal interface $INTER with DHCP open"
 	else
 		local CHAINUDPUSE=$CHAINMAININTINTERUDP
-		echo "Create the rules for internal interface $INTER with DHCP close"
 	fi
-	
-	insert_rules_quietly "-N ${CHAINMAININTER}-${INTERC[0]}"
-	insert_rules_quietly "-t nat -N ${CHAINMAININTER}-${INTERC[0]}"
 	
 	if [ ! -z "${INTERC[1]}" ]; then
-		local pid1
-		# On utilise un set des IPS car plus rapide pour le traitement
-		$IPT -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null
-
-		$IPT -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} & pids+=($!)
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}")
+		$IPT -C ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP 2> /dev/null || \
+			$IPT -A ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP && \
+			$IPT -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 		
-		$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p icmp -g $CHAINMAININTINTERICMP && \
-			insert_rules_with_test_ok_ipv4 "-A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
-			$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p tcp -g $CHAINMAININTINTERTCP && \
-			$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p udp -g $CHAINUDPUSE & pids+=($!)
-		
-		$IPT -t nat -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null
-		
-		$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} & pids+=($!)
-		
-		insert_rules_with_test_ok_ipv4 "-t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
-			$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p tcp -g $CHAINMAININTINTERTCP && \
-			$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p udp -g $CHAINUDPUSE & pids+=($!)
+		$IPT -t nat -C ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP 2> /dev/null || \
+			$IPT -t nat -A ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP && \
+			$IPT -t nat -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 	fi
 	if [ ! -z "${INTERC[2]}" ]; then
-		local pid1
-		# On utilise un set des IPS car plus rapide pour le traitement
-		$IPT6 -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null
-
-		$IPT6 -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} & pids+=($!)
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}")
+		$IPT6 -C ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP 2> /dev/null || \
+			$IPT6 -A ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP && \
+			$IPT6 -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 		
-		$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
-			insert_rules_with_test_ok_ipv6 "-A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
-			$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p tcp -g $CHAINMAININTINTERTCP && \
-			$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p udp -g $CHAINUDPUSE & pids+=($!)
-	
-		$IPT6 -t nat -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null
-		
-		$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} & pids+=($!)
-		
-		insert_rules_with_test_ok_ipv6 "-t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
-			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p tcp -g $CHAINMAININTINTERTCP && \
-			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p udp -g $CHAINUDPUSE & pids+=($!)
+		$IPT6 -t nat -C ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP 2> /dev/null || \
+			$IPT6 -t nat -A ${chaintouse} -p tcp -g $CHAINMAININTINTERTCP && \
+			$IPT6 -t nat -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 	fi
 	wait "${pids[@]}"
 	return 0
@@ -1508,52 +1631,29 @@ insert_rules_accept_trafic_local_out_interface()
 	
 	if [ -v interfaceWithDHCP["$INTER"] ] && [ "${interfaceWithDHCP[$INTER]}" -eq 1 ]; then
 		local CHAINUDPUSE=$CHAINOPENLOCALPORTUDPDHCP
-		echo "Create the rules for internal interface $INTER with DHCP open"
 	else
 		local CHAINUDPUSE=$CHAINOPENLOCALPORTUDP
-		echo "Create the rules for internal interface $INTER with DHCP close"
 	fi
-	
-	insert_rules_quietly "-N ${CHAINMAININTER}-${INTERC[0]}"
-	insert_rules_quietly "-t nat -N ${CHAINMAININTER}-${INTERC[0]}"
 	
 	if [ ! -z "${INTERC[1]}" ]; then
-		# On utilise un set des IPS car plus rapide pour le traitement
-		$IPT -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null
-
-		$IPT -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} & pids+=($!)
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}")
+		$IPT -C ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP 2> /dev/null || \
+			$IPT -A ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP && \
+			$IPT -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 		
-		$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p icmp -g $CHAINMAININTINTERICMP && \
-			insert_rules_with_test_ok_ipv4 "-A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -m set --match-set $IPSLISTBADIP src -j DROP" "" && \
-			$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p tcp -g $CHAINOPENLOCALPORTTCP && \
-			$IPT -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p udp -g $CHAINUDPUSE & pids+=($!)
-		
-		$IPT -t nat -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null
-
-		$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[1]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} & pids+=($!)
-		
-		insert_rules_with_test_ok_ipv4 "-t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
-			$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p tcp -g $CHAINOPENLOCALPORTTCP && \
-			$IPT -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} -p udp -g $CHAINUDPUSE & pids+=($!)
+		$IPT -t nat -C ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP 2> /dev/null || \
+			$IPT -t nat -A ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP && \
+			$IPT -t nat -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 	fi
 	if [ ! -z "${INTERC[2]}" ]; then
-		# On fait un set des IPS car plus rapide pour le traitement
-		$IPT6 -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null
-
-		$IPT6 -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} & pids+=($!)
-		
-		$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p ipv6-icmp -g $CHAINMAININTINTERICMP && \
-			insert_rules_with_test_ok_ipv6 "-A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" && \
-			$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p tcp -g $CHAINOPENLOCALPORTTCP && \
-			$IPT6 -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p udp -g $CHAINUDPUSE & pids+=($!)
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}")
+		$IPT6 -C ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP 2> /dev/null || \
+			$IPT6 -A ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP && \
+			$IPT6 -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 	
-		$IPT6 -t nat -N ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null
-
-		$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]} -m set --match-set ${INTERC[2]} src -g ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} & pids+=($!)
-		
-		insert_rules_with_test_ok_ipv6 "-t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
-			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p tcp -g $CHAINOPENLOCALPORTTCP && \
-			$IPT6 -t nat -A ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} -p udp -g $CHAINUDPUSE & pids+=($!)
+		$IPT6 -t nat -C ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP 2> /dev/null || \
+			$IPT6 -t nat -A ${chaintouse} -p tcp -g $CHAINOPENLOCALPORTTCP && \
+			$IPT6 -t nat -A ${chaintouse} -p udp -g $CHAINUDPUSE & pids+=($!)
 	fi
 	wait "${pids[@]}"
 	return 0
@@ -1604,7 +1704,7 @@ install_paquets_needed()
 {
 	export DEBIAN_FRONTEND=noninteractive
 	apt update
-	apt install -y -o Dpkg::Options::="--force-confold" software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 net-tools ipset --no-install-recommends
+	apt install -y -o Dpkg::Options::="--force-confold" software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 net-tools ipset iptables-persistent ipset-persistent netfilter-persistent --no-install-recommends
 	#coreutils
 	apt install -y -o Dpkg::Options::="--force-confold" linux-headers-$(uname -r)
 }
@@ -1675,3 +1775,6 @@ wait
 esac
 
 #update-rc.d firewall defaults;
+# systemctl enable netfilter-persistent
+# systemctl start netfilter-persistent
+# systemctl status netfilter-persistent

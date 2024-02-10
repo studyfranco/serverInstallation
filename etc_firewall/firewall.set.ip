@@ -3,9 +3,12 @@
 source /etc/firewall/firewall.settings
 source /etc/firewall/firewall.tools
 
+hosts_deny_file="/etc/hosts.deny"
+
 add_doh()
 {
 	$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null
+	$IPS flush $IPSDOH
 	$IPS add $IPSDOH 8.8.4.4,443 2> /dev/null &
 	$IPS add $IPSDOH 8.8.8.8,443 2> /dev/null &
 	$IPS add $IPSDOH 149.112.112.112,443 2> /dev/null &
@@ -63,6 +66,7 @@ add_doh()
 add_doh6()
 {
 	$IPS create ${IPSDOH}6 hash:ip,port maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSDOH}6
 	local line
 	curl -s https://raw.githubusercontent.com/oneoffdallas/dohservers/master/ipv6list.txt | while read -r line
 	do
@@ -80,19 +84,31 @@ add_doh6()
 
 add_ipaut()
 {
-	{ $IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSLISTGOODIP 2> /dev/null; }
+	$IPS create $IPSLISTGOODIP hash:ip maxelem 999999999 2> /dev/null
+	$IPS flush $IPSLISTGOODIP 2> /dev/null
 	# Ajout des IPV4s autorisé
 	local IP
 	for IP in "${IPAutor[@]}"; do
 		$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+		$ROUTE -n del $IPSLISTGOODIP reject 2> /dev/null &
+		$SED -i "/^ALL: ${IPSLISTGOODIP} : DENY/d" "${hosts_deny_file}" &
+		#${FAILBAN} set sshd unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		#${FAILBAN} set recidive unbanip ${IPSLISTGOODIP} 2> /dev/null &
 	done
 	wait
 }
 
 add_ipaut6()
 {
-	{ $IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSLISTGOODIP}6 2> /dev/null; }
-
+	$IPS create ${IPSLISTGOODIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLISTGOODIP}6 2> /dev/null
+	
+		#$IPS add $IPSLISTGOODIP $IP 2> /dev/null &
+		#$ROUTE -n del $IPSLISTGOODIP reject 2> /dev/null &
+		#$SED -i "/^ALL: ${IPSLISTGOODIP} : DENY/d" "${hosts_deny_file}" &
+		#${FAILBAN} set sshd unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		#${FAILBAN} set recidive unbanip ${IPSLISTGOODIP} 2> /dev/null &
+		
 	wait
 }
 
@@ -139,6 +155,7 @@ add_ipblock6_actions()
 add_iplocal()
 {
 	$IPS create ${IPSLOCALS} hash:net maxelem 999999999 2> /dev/null
+	$IPS flush ${IPSLOCALS} 2> /dev/null
 	$IPS add ${IPSLOCALS} 192.168.0.0/16 2> /dev/null &
 	$IPS add ${IPSLOCALS} 172.16.0.0/12 2> /dev/null &
 	$IPS add ${IPSLOCALS} 10.0.0.0/8 2> /dev/null &
@@ -148,6 +165,7 @@ add_iplocal()
 add_iplocal6()
 {
 	$IPS create ${IPSLOCALS}6 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLOCALS}6 2> /dev/null
 	$IPS add ${IPSLOCALS}6 fe80::/10 2> /dev/null &
 	$IPS add ${IPSLOCALS}6 fc00::/7 2> /dev/null &
 	$IPS add ${IPSLOCALS}6 fd00::/8 2> /dev/null &
@@ -156,8 +174,10 @@ add_iplocal6()
 
 add_ip_plex()
 {
-	{ $IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null; $IPS flush $IPSPLEXIPS 2> /dev/null; }
-	{ $IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null; $IPS flush ${IPSPLEXIPS}6 2> /dev/null; }
+	$IPS create $IPSPLEXIPS hash:ip maxelem 999999999 2> /dev/null
+	$IPS flush $IPSPLEXIPS 2> /dev/null
+	$IPS create ${IPSPLEXIPS}6 hash:ip maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSPLEXIPS}6 2> /dev/null
 	# Open plex ports https://s3-eu-west-1.amazonaws.com/plex-sidekiq-servers-list/sidekiqIPs.txt
 	$IPS add $IPSPLEXIPS "54.170.120.91" 2> /dev/null &
 	$IPS add $IPSPLEXIPS "46.51.207.89" 2> /dev/null &

@@ -9,6 +9,7 @@ DUMPCO=/bin/ss
 DOCKER=/bin/docker
 IFCONFIG=/usr/sbin/ifconfig
 JQ=/usr/bin/jq
+FAILBAN=/usr/bin/fail2ban-client
 
 IPSLISTBADIP="bad_ip"
 IPSLISTGOODIP="good_ip"
