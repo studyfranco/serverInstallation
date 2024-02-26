@@ -225,6 +225,31 @@ insert_rules_list_ports()
 	return 0
 }
 
+open_port_for_network()
+{
+	local INTER=$1 # inter;net/mask;net6/mask;proto;port
+	declare -a pids=()
+	local INTERC
+	IFS=';' read -r -a INTERC <<< $INTER
+	
+	if [ ! -z "${INTERC[1]}" ]; then
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]}-${INTERC[3]}")
+
+		$IPT -C ${chaintouse} -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT 2> /dev/null || \
+			$IPT -I ${chaintouse} 1 -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT & pids+=($!)
+	
+	fi
+	if [ ! -z "${INTERC[2]}" ]; then
+		local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]}-${INTERC[3]}")
+
+		$IPT6 -C ${chaintouse} -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT 2> /dev/null || \
+			$IPT6 -I ${chaintouse} 1 -p ${INTERC[3]} --dport ${INTERC[4]} -j ACCEPT & pids+=($!)
+	
+	fi
+	wait "${pids[@]}"
+	return 0
+}
+
 ## insert_rules_list_docker_ports_to_host "container_name" "network" "-t " "-Aor-I" "I position" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
 insert_rules_list_docker_ports_to_host()
 {

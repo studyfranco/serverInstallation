@@ -23,6 +23,7 @@ mainInter="eth0"
 declare -a INTEROut=("eth0;192.168.0.0/24;fc00::/64")
 declare -a interfaceToGoOutSide=("virbr1;192.168.100.0/24;fe80:1::/64")
 declare -a internInterfaceHaveAccessAsLocal=("virbr1;192.168.100.0/24;fe80:1::/64")
+declare -a interfaceLocal=()
 declare -A interfaceWithDHCP=( ["virbr1;192.168.100.0/24;fe80:1::/64"]=1 )
 declare -a interfaceWithNoRules=() # You need to add the rules, but the structure is create
 
