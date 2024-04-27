@@ -115,7 +115,8 @@ add_ipaut6()
 add_ipblock()
 {
 	local pid
-	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null & pid=$!
+	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null && \
+		$IPS flush $IPSLISTBADIP 2> /dev/null & pid=$!
 	# Creation d'un groupe pour les IPV4s Bloques
 	declare -a IPBlock
 	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
@@ -125,30 +126,43 @@ add_ipblock()
 		add_ipblock_actions "${IP}" &
 		#sleep 0.001
 	done
+	mapfile -t IPBlock < /etc/firewall/to_block.ipv4
+	for IP in "${IPBlock[@]}"; do
+		add_ipblock_actions "${IP}" &
+		#sleep 0.001
+	done
 	wait
 }
 
 add_ipblock_actions()
 {
-	$IPS add $IPSLISTBADIP $1 2> /dev/null
-	$DUMPCO -k src $1 > /dev/null 2>&1 &
-	$DUMPCO -k dst $1 > /dev/null 2>&1 &
+	nice -n 30 $IPS add $IPSLISTBADIP $1 2> /dev/null
+	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
+	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
 	wait
 }
 
 add_ipblock6()
 {
 	local pid
-	$IPS create ${IPSLISTBADIP}6 hash:ip maxelem 999999999 family inet6 2> /dev/null & pid=$!
+	$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null  && \
+		$IPS flush ${IPSLISTBADIP}6 2> /dev/null & pid=$!
+	declare -a IPBlock6
+	mapfile -t IPBlock < /etc/firewall/to_block.ipv6
+	local IP
 	wait $pid
+	for IP in "${IPBlock[@]}"; do
+		add_ipblock6_actions "${IP}" &
+		#sleep 0.001
+	done
 	wait
 }
 
 add_ipblock6_actions()
 {
-	$IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
-	$DUMPCO -6 -k src $1 > /dev/null 2>&1 &
-	$DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
+	nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
+	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
+	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
 	wait
 }
 
@@ -169,6 +183,15 @@ add_iplocal6()
 	$IPS add ${IPSLOCALS}6 fe80::/10 2> /dev/null &
 	$IPS add ${IPSLOCALS}6 fc00::/7 2> /dev/null &
 	$IPS add ${IPSLOCALS}6 fd00::/8 2> /dev/null &
+	wait
+}
+
+add_iplocal6_80()
+{
+	$IPS create ${IPSLOCALS}6_80 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPSLOCALS}6_80 2> /dev/null
+	$IPS add ${IPSLOCALS}6_80 fe80::/10 2> /dev/null &
+	$IPS add ${IPSLOCALS}6_80 fe80::/64 2> /dev/null &
 	wait
 }
 
@@ -195,14 +218,42 @@ add_ip_plex()
 	wait
 }
 
+add_country_open_set()
+{
+	$IPS create ${IPCCOPEN} hash:net maxelem 999999999 2> /dev/null
+	$IPS create ${IPCCOPEN}6 hash:net maxelem 999999999 family inet6 2> /dev/null
+	$IPS flush ${IPCCOPEN} 2> /dev/null
+	$IPS flush ${IPCCOPEN}6 2> /dev/null
+
+	for country in $(echo $countryOpenPort | tr ',' '\n'); do
+		country=$(echo "$country" | tr '[:upper:]' '[:lower:]')
+		get_ip_country_open "https://www.ipdeny.com/ipblocks/data/aggregated/${country}-aggregated.zone" "${IPCCOPEN}" &
+		get_ip_country_open "https://www.ipdeny.com/ipv6/ipaddresses/aggregated/${country}-aggregated.zone" "${IPCCOPEN}6" &
+	done
+	wait
+}
+
+get_ip_country_open() {
+	local network
+	local URL=$1
+	local setIP=$2
+	for network in $(curl ${URL} 2>/dev/null | grep -v "^#" | cut -d " " -f 1); do
+		$IPS add ${setIP} ${network}
+	done
+}
+
 add_doh &
 add_doh6 &
 add_ipaut &
 add_ipaut6 &
-add_ipblock &
-add_ipblock6 &
 add_iplocal &
 add_iplocal6 &
+add_iplocal6_80 &
 add_ip_plex &
+add_country_open_set &
+
+/etc/firewall/firewall.get.list
+add_ipblock &
+add_ipblock6 &
 
 wait

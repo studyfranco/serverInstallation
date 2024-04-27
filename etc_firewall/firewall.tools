@@ -1,4 +1,5 @@
 #! /bin/bash
+#source /etc/firewall/firewall.settings
 IPT=/sbin/iptables
 IPT6=/sbin/ip6tables
 IPS=/sbin/ipset
@@ -117,7 +118,7 @@ is_ipv6_net()
 {
 	local input="$1"
 	# Utilisation d'une expression régulière pour la validation
-	if [[ $input =~ ^[a-f0-9:]*:[a-f0-9:]*:[a-f0-9:]*/[0-9]+$ ]]; then
+	if [[ $input =~ ^[a-f0-9]{1,4}:[a-f0-9:]*:[a-f0-9]{0,4}/[0-9]{1,3}$ ]]; then
 		return 0 # C'est une reseau IPv6 valide
 	else
 		return 1 # Ce n'est pas une reseau IPv6 valide
@@ -129,7 +130,7 @@ is_ipv6()
 {
 	local input="$1"
 	# Utilisation d'une expression régulière pour la validation
-	if [[ $input =~ ^[a-f0-9:]*:[a-f0-9:]*:[a-f0-9]$ ]]; then
+	if [[ $input =~ ^[a-f0-9:]{1,4}:[a-f0-9:]*:[a-f0-9]{0,4}$ ]]; then
 		return 0 # C'est une adresse IPv6 valide
 	else
 		return 1 # Ce n'est pas une adresse IPv6 valide
@@ -299,13 +300,87 @@ insert_rules_list_docker_ports_to_host()
 				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
-					$IPT ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT -C ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
 			elif is_ipv6_net "$subnet"; then
 				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
-					$IPT6 ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 -C ${cmd_args} ${chaintouse}${cmd_args_v6_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${cmd_args} ${chaintouse}${cmd_args_v6_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+				done
+			fi
+		done
+	fi
+	wait "${pids[@]}"
+	return 0
+}
+
+## insert_rules_list_docker_ports_to_another_container "container_name_source" "container_name_cible" "network" "-Aor-I" "I position" "-m ipv4" "-m ipv6" "-j" "tcp/udp" ARRAY
+insert_rules_list_docker_ports_to_another_container()
+{
+	local container_name_source=$1
+	shift
+	local container_name_cible=$1
+	shift
+	local network=$1
+	shift
+	local network_interface=$(get_bridge_name_docker_network "${network}")
+	if [ -n "${network_interface}" ]; then
+		local cmd_args=""
+		cmd_args+="$option_t"
+		local option_A_I=$1 #-A ?/-I ?
+		shift
+		cmd_args+=" $option_A_I"
+		local cmd_args_v4_end=""
+		local cmd_args_v6_end=""
+		local position_I=$1 #1/2/3/?/....
+		shift
+		if [ ! -z "${position_I}" ]; then
+			cmd_args_v4_end+=" ${position_I}"
+			cmd_args_v6_end+=" ${position_I}"
+		fi
+		local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
+		shift
+		if [ ! -z "$option_m_v4" ]; then
+			cmd_args_v4_end+=" $option_m_v4"
+		fi
+		local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
+		shift
+		if [ ! -z "$cmd_args_v6" ]; then
+			cmd_args_v6_end+=" $option_m_v6"
+		fi
+		local option_j=$1 #-j ACCEPT
+		shift
+		local proto=$1 #tcp/udp
+		shift
+		local ports=("$@")
+
+		declare -a pids=()
+		local PORT
+		local json_NETWORK=$(${DOCKER} network inspect -f '{{json .IPAM.Config}}' "${network}")
+		# Parcours de la liste des sous-réseaux dans la sortie JSON
+		for subnet in $(echo "${json_NETWORK}" | ${JQ} -r '.[] | .Subnet'); do
+			if is_ipv4_net "$subnet"; then
+				local ipv4_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_source})
+				local ipv4_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_cible})
+				for PORT in "${ports[@]}"; do
+					$IPT -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					
+					$IPT -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
+				done
+			elif is_ipv6_net "$subnet"; then
+				local ipv6_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_source})
+				local ipv6_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_cible})
+				for PORT in "${ports[@]}"; do
+					$IPT6 -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					
+					$IPT6 -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
 				done
 			fi
 		done

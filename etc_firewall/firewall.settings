@@ -18,6 +18,7 @@ IPSINTERNALIPS="i"
 IPSPLEXIPS="plex_ip"
 IPSDOH="doh_serv"
 IPSLOCALS="generic_local"
+IPCCOPEN="open_cc_ips"
 
 mainInter="eth0"
 declare -a INTEROut=("eth0;192.168.0.0/24;fc00::/64")
@@ -27,9 +28,9 @@ declare -a interfaceLocal=()
 declare -A interfaceWithDHCP=( ["virbr1;192.168.100.0/24;fe80:1::/64"]=1 )
 declare -a interfaceWithNoRules=() # You need to add the rules, but the structure is create
 
-declare -a dockerNetworkWithInternalAccess=() # Equivalent of icc=True
-declare -a dockerNetworkWithInternetAccess=() # Open to the world
-declare -a dockerNetworkWithHostAccess=() # You need to add the rules, but the structure is create
+declare -a dockerNetworkWithInternetAccess=("bridge") # Open to the world (bridge is the default network in docker)
+declare -a dockerNetworkWithAccess=() # You need to add the rules, but the structure is create
+declare -a dockerAccessBetweenThem=("cSource;cCible;bridge;tcp;55;10;1580") # Securise the communication between your container
 
 # List of trusted IPs
 declare -a IPAutor=()
@@ -133,3 +134,5 @@ CHAINFORWARDTRAFIC="FT"
 
 CHAINPATMAIN="z-redirect-main"
 CHAINPATLOG="z-redirect-log"
+
+saveFileGeoIPDB="/etc/firewall/GeoIPCountryWhois.csv"

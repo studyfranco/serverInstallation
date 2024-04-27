@@ -1,0 +1,20 @@
+#! /bin/bash
+
+source /etc/firewall/firewall.settings
+source /etc/firewall/firewall.tools
+
+tmpFolder="/tmp/xt_geoip_dl"
+
+mkdir -p ${tmpFolder}
+cd ${tmpFolder}
+/usr/libexec/xtables-addons/xt_geoip_dl
+cat *.csv > ${saveFileGeoIPDB}
+
+[ ! -f ${saveFileGeoIPDB} ] && { echo "Error: GeoIPCountryWhois.csv file not found."; exit 1; }
+[ ! -s ${saveFileGeoIPDB} ] && { echo "Error: GeoIPCountryWhois.csv file is empty."; exit 1; }
+
+mkdir -p /usr/share/xt_geoip  2> /dev/null
+/usr/libexec/xtables-addons/xt_geoip_build -D /usr/share/xt_geoip ${saveFileGeoIPDB}
+
+cd /
+rm -r ${tmpFolder}
