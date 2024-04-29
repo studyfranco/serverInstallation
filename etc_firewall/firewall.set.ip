@@ -115,8 +115,9 @@ add_ipaut6()
 add_ipblock()
 {
 	local pid
-	$IPS create $IPSLISTBADIP hash:ip maxelem 999999999 2> /dev/null && \
-		$IPS flush $IPSLISTBADIP 2> /dev/null & pid=$!
+	$IPS create ${IPSLISTBADIP} hash:ip maxelem 999999999 2> /dev/null &
+	$IPS create temp_${IPSLISTBADIP} hash:ip maxelem 999999999 2> /dev/null && \
+		$IPS flush temp_${IPSLISTBADIP} 2> /dev/null & pid=$!
 	# Creation d'un groupe pour les IPV4s Bloques
 	declare -a IPBlock
 	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
@@ -131,12 +132,14 @@ add_ipblock()
 		add_ipblock_actions "${IP}" &
 		#sleep 0.001
 	done
+	ipset swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
+	ipset destroy temp_${IPSLISTBADIP}
 	wait
 }
 
 add_ipblock_actions()
 {
-	nice -n 30 $IPS add $IPSLISTBADIP $1 2> /dev/null
+	nice -n 30 $IPS add temp_${IPSLISTBADIP} $1 2> /dev/null
 	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
 	wait
@@ -145,22 +148,30 @@ add_ipblock_actions()
 add_ipblock6()
 {
 	local pid
-	$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null  && \
-		$IPS flush ${IPSLISTBADIP}6 2> /dev/null & pid=$!
+	$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
+	$IPS create temp_${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null && \
+		$IPS flush temp_${IPSLISTBADIP}6 2> /dev/null & pid=$!
 	declare -a IPBlock6
-	mapfile -t IPBlock < /etc/firewall/to_block.ipv6
+	mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
 	local IP
 	wait $pid
 	for IP in "${IPBlock[@]}"; do
 		add_ipblock6_actions "${IP}" &
 		#sleep 0.001
 	done
+	mapfile -t IPBlock6 < /etc/firewall/firewall.block.ip6
+	for IP in "${IPBlock[@]}"; do
+		add_ipblock6_actions "${IP}" &
+		#sleep 0.001
+	done
+	ipset swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
+	ipset destroy temp_${IPSLISTBADIP}6
 	wait
 }
 
 add_ipblock6_actions()
 {
-	nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
+	nice -n 30 $IPS add temp_${IPSLISTBADIP}6 $1 2> /dev/null
 	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
 	wait

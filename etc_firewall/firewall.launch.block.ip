@@ -10,23 +10,29 @@ TARGET="$1"
 
 CAUSE="$2"
 
-/bin/cscli decisions add -i "${TARGET}" --duration 100000h --reason "${CAUSE}" &
+if ! ip addr show | grep -wq "${TARGET}"; then
+	timeout 300 /bin/cscli decisions add -i "${TARGET}" --duration 100000h --reason "${CAUSE}" &
+fi
 /usr/bin/fail2ban-client set sshd unbanip ${TARGET} 2> /dev/null &
 /usr/bin/fail2ban-client set recidive unbanip ${TARGET} 2> /dev/null &
 
 if is_ipv4 "${TARGET}"; then
-	$ROUTE add -host ${TARGET} reject 2> /dev/null
-	$IPS add $IPSLISTBADIP ${TARGET} 2> /dev/null &
-	/bin/echo "${TARGET}" | tee -a /etc/firewall/firewall.block.ip &
-	$DUMPCO -k src ${TARGET} > /dev/null 2>&1 &
-	$DUMPCO -k dst ${TARGET} > /dev/null 2>&1 &
+	if ! ip addr show | grep -wq "${TARGET}"; then
+		$ROUTE add -host ${TARGET} reject 2> /dev/null
+		$IPS add $IPSLISTBADIP ${TARGET} 2> /dev/null &
+		/bin/echo "${TARGET}" | tee -a /etc/firewall/firewall.block.ip &
+		$DUMPCO -k src ${TARGET} > /dev/null 2>&1 &
+		$DUMPCO -k dst ${TARGET} > /dev/null 2>&1 &
+	fi
 	$ROUTE -n del ${TARGET} reject 2> /dev/null
 elif is_ipv6 "${TARGET}"; then
-	$ROUTE -6 add -host ${TARGET} reject 2> /dev/null
-	$IPS add ${IPSLISTBADIP}6 ${TARGET} 2> /dev/null &
-	/bin/echo "${TARGET}" | tee -a /etc/firewall/firewall.block.ip6 &
-	$DUMPCO -6 -k src ${TARGET} > /dev/null 2>&1 &
-	$DUMPCO -6 -k dst ${TARGET} > /dev/null 2>&1 &
+	if ! ip addr show | grep -wq "${TARGET}"; then
+		$ROUTE -6 add -host ${TARGET} reject 2> /dev/null
+		$IPS add ${IPSLISTBADIP}6 ${TARGET}/48 2> /dev/null &
+		/bin/echo "${TARGET}/48" | tee -a /etc/firewall/firewall.block.ip6 &
+		$DUMPCO -6 -k src ${TARGET} > /dev/null 2>&1 &
+		$DUMPCO -6 -k dst ${TARGET} > /dev/null 2>&1 &
+	fi
 	$ROUTE -6 -n del ${TARGET} reject 2> /dev/null
 fi
 $SED -i "/^ALL: ${TARGET} : DENY/d" "${hosts_deny_file}"
