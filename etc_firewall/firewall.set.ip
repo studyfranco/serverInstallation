@@ -139,6 +139,7 @@ add_ipblock()
 
 add_ipblock_actions()
 {
+	nice -n 30 $IPS add ${IPSLISTBADIP} $1 2> /dev/null
 	nice -n 30 $IPS add temp_${IPSLISTBADIP} $1 2> /dev/null
 	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
@@ -171,6 +172,7 @@ add_ipblock6()
 
 add_ipblock6_actions()
 {
+	nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
 	nice -n 30 $IPS add temp_${IPSLISTBADIP}6 $1 2> /dev/null
 	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
