@@ -1,9 +1,10 @@
-#! /bin/bash
+#!/bin/bash
 
 source /etc/firewall/firewall.settings
 source /etc/firewall/firewall.tools
 
-generate_list() {
+generate_list()
+{
 	local TARGET
 	local URL=$1
 	local begin_file=$2

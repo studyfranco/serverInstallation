@@ -132,9 +132,9 @@ add_ipblock()
 		add_ipblock_actions "${IP}" &
 		#sleep 0.001
 	done
+	wait
 	ipset swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
 	ipset destroy temp_${IPSLISTBADIP}
-	wait
 }
 
 add_ipblock_actions()
@@ -164,9 +164,9 @@ add_ipblock6()
 		add_ipblock6_actions "${IP}" &
 		#sleep 0.001
 	done
+	wait
 	ipset swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
 	ipset destroy temp_${IPSLISTBADIP}6
-	wait
 }
 
 add_ipblock6_actions()
