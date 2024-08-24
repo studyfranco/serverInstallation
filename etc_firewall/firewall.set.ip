@@ -5,6 +5,15 @@ source /etc/firewall/firewall.tools
 
 hosts_deny_file="/etc/hosts.deny"
 
+# Emplacement du fichier de verrou
+LOCKFILE="/tmp/set.ip.lock"
+
+# Vérifier si un autre processus est en cours d'exécution en vérifiant le verrou
+if [ -e "$LOCKFILE" ]; then
+    echo "Un autre processus de synchronisation est en cours. Sortie."
+    exit 1
+fi
+
 add_doh()
 {
 	$IPS create $IPSDOH hash:ip,port maxelem 999999999 2> /dev/null
@@ -123,24 +132,38 @@ add_ipblock()
 	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 	local IP
 	wait $pid
+
+	$IPS save temp_${IPSLISTBADIP} > /tmp/temp_${IPSLISTBADIP} && $IPS destroy temp_${IPSLISTBADIP}
+	for IP in "${IPBlock[@]}"; do
+		echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		#sleep 0.001
+	done
+	mapfile -t IPBlock < /etc/firewall/to_block.ipv4
+	for IP in "${IPBlock[@]}"; do
+		echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		#sleep 0.001
+	done
+	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}
+	$IPS swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
+	$IPS destroy temp_${IPSLISTBADIP} &
+	rm /tmp/temp_${IPSLISTBADIP} &
+
 	for IP in "${IPBlock[@]}"; do
 		add_ipblock_actions "${IP}" &
 		#sleep 0.001
 	done
-	mapfile -t IPBlock < /etc/firewall/to_block.ipv4
+	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 	for IP in "${IPBlock[@]}"; do
 		add_ipblock_actions "${IP}" &
 		#sleep 0.001
 	done
 	wait
-	ipset swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
-	ipset destroy temp_${IPSLISTBADIP}
 }
 
 add_ipblock_actions()
 {
-	nice -n 30 $IPS add ${IPSLISTBADIP} $1 2> /dev/null
-	nice -n 30 $IPS add temp_${IPSLISTBADIP} $1 2> /dev/null
+	#nice -n 30 $IPS add ${IPSLISTBADIP} $1 2> /dev/null
+	#nice -n 30 $IPS add temp_${IPSLISTBADIP} $1 2> /dev/null
 	nice -n 100 $DUMPCO -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -k dst $1 > /dev/null 2>&1 &
 	wait
@@ -156,24 +179,38 @@ add_ipblock6()
 	mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
 	local IP
 	wait $pid
-	for IP in "${IPBlock[@]}"; do
-		add_ipblock6_actions "${IP}" &
+
+	$IPS save temp_${IPSLISTBADIP}6 > /tmp/temp_${IPSLISTBADIP}6 && $IPS destroy temp_${IPSLISTBADIP}6
+	for IP in "${IPBlock6[@]}"; do
+		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
 		#sleep 0.001
 	done
 	mapfile -t IPBlock6 < /etc/firewall/firewall.block.ip6
-	for IP in "${IPBlock[@]}"; do
+	for IP in "${IPBlock6[@]}"; do
+		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
+		#sleep 0.001
+	done
+	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}6
+	$IPS swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
+	$IPS destroy temp_${IPSLISTBADIP}6 &
+	rm /tmp/temp_${IPSLISTBADIP}6 &
+
+	for IP in "${IPBlock6[@]}"; do
+		add_ipblock6_actions "${IP}" &
+		#sleep 0.001
+	done
+	mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
+	for IP in "${IPBlock6[@]}"; do
 		add_ipblock6_actions "${IP}" &
 		#sleep 0.001
 	done
 	wait
-	ipset swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
-	ipset destroy temp_${IPSLISTBADIP}6
 }
 
 add_ipblock6_actions()
 {
-	nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
-	nice -n 30 $IPS add temp_${IPSLISTBADIP}6 $1 2> /dev/null
+	#nice -n 30 $IPS add ${IPSLISTBADIP}6 $1 2> /dev/null
+	#nice -n 30 $IPS add temp_${IPSLISTBADIP}6 $1 2> /dev/null
 	nice -n 100 $DUMPCO -6 -k src $1 > /dev/null 2>&1 &
 	nice -n 100 $DUMPCO -6 -k dst $1 > /dev/null 2>&1 &
 	wait
@@ -186,6 +223,9 @@ add_iplocal()
 	$IPS add ${IPSLOCALS} 192.168.0.0/16 2> /dev/null &
 	$IPS add ${IPSLOCALS} 172.16.0.0/12 2> /dev/null &
 	$IPS add ${IPSLOCALS} 10.0.0.0/8 2> /dev/null &
+	
+	$IPS add ${IPSLOCALS} 198.18.0.0/15 2> /dev/null &
+	$IPS add ${IPSLOCALS} 100.64.0.0/10 2> /dev/null &
 	wait
 }
 
@@ -270,3 +310,9 @@ add_ipblock &
 add_ipblock6 &
 
 wait
+
+# Supprimer le fichier de verrou pour libérer le verrou
+rm -f "$LOCKFILE"
+
+# Fin du script
+exit 0
