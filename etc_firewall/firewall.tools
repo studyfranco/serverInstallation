@@ -328,11 +328,11 @@ insert_rules_list_docker_ports_to_another_container()
 	shift
 	local network_interface=$(get_bridge_name_docker_network "${network}")
 	if [ -n "${network_interface}" ]; then
-		local cmd_args=""
-		cmd_args+="$option_t"
+		#local cmd_args=""
+		#cmd_args+="$option_t"
 		local option_A_I=$1 #-A ?/-I ?
 		shift
-		cmd_args+=" $option_A_I"
+		#cmd_args+=" $option_A_I"
 		local cmd_args_v4_end=""
 		local cmd_args_v6_end=""
 		local position_I=$1 #1/2/3/?/....
@@ -366,25 +366,48 @@ insert_rules_list_docker_ports_to_another_container()
 				local ipv4_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_source})
 				local ipv4_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name_cible})
 				for PORT in "${ports[@]}"; do
-					$IPT -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -o ${network_interface} -s ${ipv4_source} -d ${ipv4_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 					
-					$IPT -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
+					$IPT -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v4_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv4_cible} -d ${ipv4_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
 				done
 			elif is_ipv6_net "$subnet"; then
 				local ipv6_source=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_source})
 				local ipv6_cible=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name_cible})
 				for PORT in "${ports[@]}"; do
-					$IPT6 -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT6 ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -o ${network_interface} -s ${ipv6_source} -d ${ipv6_cible} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 					
-					$IPT6 -C ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT6 ${cmd_args} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${option_A_I} ${CHAINFORWARDTRAFIC}-from-${network_interface}${cmd_args_v6_end} -m conntrack --ctstate ESTABLISHED,RELATED -o ${network_interface} -s ${ipv6_cible} -d ${ipv6_source} -p ${proto} --sport ${PORT} ${option_j} & pids+=($!)
 				done
 			fi
 		done
 	fi
 	wait "${pids[@]}"
+	return 0
+}
+
+insert_crowdsec_list_rules()
+{
+	local command_begin=$1
+	shift
+	local command_end=$1
+	local list
+	for list in $(ipset list -name | grep "${crowdsecSetIPBeginName}"); do
+		$IPT ${command_begin} -m set --match-set ${list} ${command_end}
+	done
+	return 0
+}
+insert_crowdsec6_list_rules()
+{
+	local command_begin=$1
+	shift
+	local command_end=$1
+	local list
+	for list in $(ipset list -name | grep "${crowdsecSetIP6BeginName}"); do
+		$IPT6 ${command_begin} -m set --match-set ${list} ${command_end}
+	done
 	return 0
 }

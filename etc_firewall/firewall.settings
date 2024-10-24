@@ -136,3 +136,6 @@ CHAINPATMAIN="z-redirect-main"
 CHAINPATLOG="z-redirect-log"
 
 saveFileGeoIPDB="/etc/firewall/GeoIPCountryWhois.csv"
+
+crowdsecSetIPBeginName="crowdsec-blacklists"
+crowdsecSetIP6BeginName="crowdsec6-blacklists"

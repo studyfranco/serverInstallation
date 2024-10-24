@@ -29,7 +29,7 @@ if is_ipv4 "${TARGET}"; then
 	$ROUTE -n del ${TARGET} reject 2> /dev/null
 elif is_ipv6 "${TARGET}"; then
 	if ! ip addr show | grep -wq "${TARGET}"; then
-		#/etc/firewall/firewall.add.pf "${TARGET}" "${CAUSE}" "bad_ipv6_auto_add" &
+		#/etc/firewall/firewall.add.pf "${TARGET}/48" "${CAUSE}" "bad_ipv6_auto_add" &
 		$ROUTE -6 add -host ${TARGET} reject 2> /dev/null
 		$IPS add ${IPSLISTBADIP}6 ${TARGET}/48 2> /dev/null &
 		/bin/echo "${TARGET}/48" | tee -a /etc/firewall/firewall.block.ip6 &
@@ -41,3 +41,4 @@ fi
 $SED -i "/^ALL: ${TARGET} : DENY/d" "${hosts_deny_file}"
 
 wait
+exit 0

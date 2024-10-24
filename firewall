@@ -91,6 +91,7 @@ set_rules()
 	local INTER
 	local INTERC
 	wait $pid1
+	echo "wait pidsI"
 	wait "${pidsI[@]}"
 	# On autorise les connexions dont l état est RELATED ou ESTABLISHED des packets
 	# On fais en sorte que les IPs autorisé puisse enfin avoir de la connectivité
@@ -108,7 +109,9 @@ set_rules()
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERDROPBADIPSRC -m set --match-set $IPSLISTBADIP src -j DROP" "" &
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERDROPBADIPSRC -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERDROPBADIPSRC -m set --match-set crowdsec-blacklists src -j DROP" "" &
+	insert_crowdsec_list_rules "-A $CHAINMAINOUTINTERDROPBADIPSRC" "src -j DROP" &
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERDROPBADIPSRC -m set --match-set crowdsec6-blacklists src -j DROP" "" &
+	insert_crowdsec6_list_rules "-A $CHAINMAINOUTINTERDROPBADIPSRC" "src -j DROP" &
 
 	#-j LOG --log-prefix [iptables-warning]:badIP  --log-level 7 --log-uid --log-ip-options
 	insert_rules "-A $CHAINMAINOUTINTERLOGBADIPDSTWB -j NFLOG --nflog-prefix badIP: --nflog-threshold 5 --nflog-group 62" && \
@@ -120,7 +123,9 @@ set_rules()
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set $IPSLISTBADIP dst -g $CHAINMAINOUTINTERLOGBADIPDSTWB" "" &
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set ${IPSLISTBADIP}6 dst -g $CHAINMAINOUTINTERLOGBADIPDSTWB" "" &
 	insert_rules_with_test_ok_ipv4 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set crowdsec-blacklists dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" "" &
+	insert_crowdsec_list_rules "-A $CHAINMAINOUTINTERLOGBADIPDST" "dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" &
 	insert_rules_with_test_ok_ipv6 "-A $CHAINMAINOUTINTERLOGBADIPDST -m set --match-set crowdsec6-blacklists dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" "" &
+	insert_crowdsec6_list_rules "-A $CHAINMAINOUTINTERLOGBADIPDST" "dst -g $CHAINMAINOUTINTERLOGBADIPDSTWC" &
 	
 	# On configure le forward pour eviter de prendre trop de temps pour les VM
 	insert_rules "-I FORWARD 1 -j $CHAINFORWARDTRAFIC" && insert_rules "-I FORWARD 1 -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" &
@@ -178,6 +183,7 @@ set_rules()
 	
 	insert_set_ip_net ${interfaceToGoOutSide[@]} ${internInterfaceHaveAccessAsLocal[@]} ${INTEROut[@]} ${interfaceWithNoRules[@]} ${interfaceLocal[@]} &
 	
+	echo "wait pidsN"
 	wait "${pidsN[@]}"
 	# Après ce petit temps de configuration, nous pouvons rediriger les main
 	insert_rules_with_test_ok "-t nat -I PREROUTING -m addrtype --dst-type local -j $CHAINPATMAIN" "-t nat -I PREROUTING -j $CHAINPATMAIN" &
@@ -222,6 +228,7 @@ set_rules()
 	done
 	
 	local NETWORK
+	echo "wait pidsD"
 	wait "${pidsD[@]}"
 	insert_rules_docker_network_internal_access_open_container ${dockerAccessBetweenThem[@]} &
 	for NETWORK in ${dockerNetworkWithInternetAccess[@]}; do
@@ -406,8 +413,10 @@ set_rules()
 	
 	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTERCR -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
 		insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTERCR -m set --match-set crowdsec-blacklists src -j RETURN" "" && \
+		insert_crowdsec_list_rules "-t nat -A $CHAINMAINOUTINTERCR" "src -j RETURN" && \
 		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTERCR -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
 		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTERCR -m set --match-set crowdsec6-blacklists src -j RETURN" "" && \
+		insert_crowdsec6_list_rules "-t nat -A $CHAINMAINOUTINTERCR" "src -j RETURN" && \
 		insert_rules "-t nat -A $CHAINMAINOUTINTERCR -p tcp -g $CHAINOPENCRPORTTCP" && \
 		insert_rules "-t nat -A $CHAINMAINOUTINTERCR -p udp -g $CHAINOPENCRPORTUDP" &
 		
@@ -419,8 +428,10 @@ set_rules()
 	
 	insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTERWW -m set --match-set $IPSLISTBADIP src -j RETURN" "" && \
 		insert_rules_with_test_ok_ipv4 "-t nat -A $CHAINMAINOUTINTERWW -m set --match-set crowdsec-blacklists src -j RETURN" "" && \
+		insert_crowdsec_list_rules "-t nat -A $CHAINMAINOUTINTERWW" "src -j RETURN" && \
 		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTERWW -m set --match-set ${IPSLISTBADIP}6 src -j RETURN" "" && \
 		insert_rules_with_test_ok_ipv6 "-t nat -A $CHAINMAINOUTINTERWW -m set --match-set crowdsec6-blacklists src -j RETURN" "" && \
+		insert_crowdsec6_list_rules "-t nat -A $CHAINMAINOUTINTERWW" "src -j RETURN" && \
 		insert_rules "-t nat -A $CHAINMAINOUTINTERWW -p tcp -g $CHAINOPENWWPORTTCP" && \
 		insert_rules "-t nat -A $CHAINMAINOUTINTERWW -p udp -g $CHAINOPENWWPORTUDP" &
 	
@@ -480,6 +491,7 @@ set_rules()
 	local dnatPORTC
 	declare -A interfaceOK=()
 
+	echo "wait pidsInt"
 	wait "${pidsInt[@]}"
 	for INTER in "${INTEROut[@]}"; do
 		IFS=';' read -r -a INTERC <<< $INTER
@@ -498,8 +510,10 @@ set_rules()
 	done
 	
 	declare -A interfaceOKForwardIsolated=()
+	echo "wait pidsToWaitForLinkFowardRules"
 	wait "${pidsToWaitForLinkFowardRules[@]}"
 	insert_rules_forward_interface_link ${interfaceToGoOutSide[@]} ${interfaceWithNoRules[@]} &
+	echo "wait pidsIntm"
 	wait "${pidsIntm[@]}"
 	/bin/bash /etc/firewall/firewall.rules.special
 	$IPT6 -C ${CHAINFORWARDTRAFIC}-from-${mainInter} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2> /dev/null || $IPT6 -A ${CHAINFORWARDTRAFIC}-from-${mainInter} -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN 2> /dev/null &
@@ -541,10 +555,8 @@ set_rules()
 		fi
 	done
 
-	# Il faudrait rajouter des reseaux isolés. Surtout de docker.
 	wait
-	#netfilter-persistent save
-return 0
+	return 0
 }
 
 insert_rules() # You can use it to remove rules too
@@ -595,6 +607,7 @@ remove_chain_list()
 	for chain in "${chains[@]}"; do
 		remove_chain $table $chain
 	done
+	return 0
 }
 
 remove_chain_interface_network()
@@ -610,6 +623,7 @@ remove_chain_interface_network()
 	$IPT -t nat -F ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null && $IPT -t nat -X ${CHAINMAININTER}-${INTERC[0]}-${INTERC[1]} 2> /dev/null & pids+=($!)
 	$IPT6 -t nat -F ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null && $IPT6 -t nat -X ${CHAINMAININTER}-${INTERC[0]}-${INTERC[2]} 2> /dev/null & pids+=($!)
 	wait "${pids[@]}"
+	return 0
 }
 
 #
@@ -1042,11 +1056,11 @@ insert_dnat_inter_forward_main()
 			if [ ! -v interfaceDnatOKForward[${dnatPORTC[1]}] ]; then
 				interfaceDnatOKForward[${dnatPORTC[1]}]=0
 				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" && \
-				$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} 2> /dev/null || \
-				insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" & pids+=($!)
+					$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]} 2> /dev/null || \
+					insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-from-${dnatPORTC[1]}" & pids+=($!)
 				insert_rules_quietly "-N ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" && \
-				$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} 2> /dev/null || \
-				insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" & pids+=($!)
+					$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]} 2> /dev/null || \
+					insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${dnatPORTC[1]} -g ${CHAINFORWARDTRAFIC}-to-${dnatPORTC[1]}" & pids+=($!)
 			fi
 		fi
 	done
@@ -1302,7 +1316,11 @@ insert_rules_forward_interface_link()
 		IFS=';' read -r -a INTERC <<< $INTER
 		if [ ! -v interfaceOKForward[${INTERC[0]}] ]; then
 			$IPT -C ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} 2> /dev/null || \
-			insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" & pids+=($!)
+			insert_rules "-A ${CHAINFORWARDTRAFIC}-from -i ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-from-${INTERC[0]}" && \
+			$IPT6 -A ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} -o ${INTERC[0]} -p ipv6-icmp --icmpv6-type neighbour-advertisement -j ACCEPT && \
+			$IPT6 -A ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} -o ${INTERC[0]} -p ipv6-icmp --icmpv6-type neighbour-solicitation -j ACCEPT && \
+			$IPT6 -A ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} -o ${INTERC[0]} -p ipv6-icmp --icmpv6-type router-advertisement -j ACCEPT && \
+			$IPT6 -A ${CHAINFORWARDTRAFIC}-from-${INTERC[0]} -o ${INTERC[0]} -p ipv6-icmp --icmpv6-type router-solicitation -j ACCEPT & pids+=($!)
 			$IPT -C ${CHAINFORWARDTRAFIC}-to -o ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-to-${INTERC[0]} 2> /dev/null || \
 			insert_rules "-A ${CHAINFORWARDTRAFIC}-to -o ${INTERC[0]} -g ${CHAINFORWARDTRAFIC}-to-${INTERC[0]}" & pids+=($!)
 			interfaceOKForward[${INTERC[0]}]=0
@@ -1806,10 +1824,10 @@ install_paquets_needed()
 {
 	export DEBIAN_FRONTEND=noninteractive
 	apt update
-	apt install -y -o Dpkg::Options::="--force-confold" coreutils
-	apt install -y -o Dpkg::Options::="--force-confold" software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 net-tools ipset --no-install-recommends
+	apt install -y -o Dpkg::Options::="--force-confold" coreutils linux-headers-generic
+	apt install -y -o Dpkg::Options::="--force-confold" software-properties-common xtables-addons-common libtext-csv-xs-perl libnet-cidr-lite-perl g++ xtables-addons-dkms libtext-csv-xs-perl jq iproute2 net-tools ipset ulogd2 --no-install-recommends
 	apt purge -y netfilter-persistent iptables-persistent ipset-persistent
-	apt install -y -o Dpkg::Options::="--force-confold" linux-headers-$(uname -r)
+	return 0
 }
 
 update_crowdsec_rules()
@@ -1822,16 +1840,17 @@ update_crowdsec_rules()
 	cscli scenarios upgrade LePresidente/ssh-bad-keyexchange-bf aidalinfo/tcpudp-flood-traefik
 
 	systemctl reload crowdsec
+	return 0
 }
 
 command="$1"
 case "$command" in
         start|force-start)
 				/bin/bash /etc/firewall/firewall.set.ip &
-                set_rules
-                ;;
+				set_rules
+				;;
 
-        stop)
+		stop)
 				echo "If you want clean rules, ask me clean !"
 				;;
 
@@ -1857,11 +1876,11 @@ case "$command" in
 		clean)
                 delete_rules
                 ;;
-				
+
 		computer-restart)
 				update_crowdsec_rules &
 				install_paquets_needed
-				/bin/bash /etc/firewall/firewall.set.ip &
+				#/bin/bash /etc/firewall/firewall.set.ip &
 				flush_rules
 				set_rules
 				;;
@@ -1879,6 +1898,4 @@ wait
 esac
 
 #update-rc.d firewall defaults;
-# systemctl enable netfilter-persistent
-# systemctl start netfilter-persistent
-# systemctl status netfilter-persistent
+exit 0

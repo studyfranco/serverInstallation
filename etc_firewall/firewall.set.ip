@@ -124,40 +124,56 @@ add_ipaut6()
 add_ipblock()
 {
 	local pid
-	$IPS create ${IPSLISTBADIP} hash:ip maxelem 999999999 2> /dev/null &
-	$IPS create temp_${IPSLISTBADIP} hash:ip maxelem 999999999 2> /dev/null && \
+	$IPS create ${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null &
+	$IPS create temp_${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null && \
 		$IPS flush temp_${IPSLISTBADIP} 2> /dev/null & pid=$!
 	# Creation d'un groupe pour les IPV4s Bloques
 	declare -a IPBlock
 	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
 	local IP
 	wait $pid
+	
+	insert_rules_with_test_ok_ipv4 "-I INPUT 1 -m set --match-set $IPSLISTBADIP src -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I OUTPUT 1 -m set --match-set $IPSLISTBADIP dst -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I FORWARD 1 -m set --match-set $IPSLISTBADIP src -j DROP" "" &
+	insert_rules_with_test_ok_ipv4 "-I FORWARD 1 -m set --match-set $IPSLISTBADIP dst -j DROP" "" &
 
 	$IPS save temp_${IPSLISTBADIP} > /tmp/temp_${IPSLISTBADIP} && $IPS destroy temp_${IPSLISTBADIP}
 	for IP in "${IPBlock[@]}"; do
-		echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
-		#sleep 0.001
+		if is_ipv4 "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		elif is_ipv4_net "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		fi
 	done
 	mapfile -t IPBlock < /etc/firewall/to_block.ipv4
 	for IP in "${IPBlock[@]}"; do
-		echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
-		#sleep 0.001
+		if is_ipv4 "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		elif is_ipv4_net "${IP}"; then
+			echo "add temp_${IPSLISTBADIP} ${IP}" >> /tmp/temp_${IPSLISTBADIP}
+		fi
 	done
 	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}
 	$IPS swap temp_${IPSLISTBADIP} ${IPSLISTBADIP}
 	$IPS destroy temp_${IPSLISTBADIP} &
 	rm /tmp/temp_${IPSLISTBADIP} &
 
-	for IP in "${IPBlock[@]}"; do
-		add_ipblock_actions "${IP}" &
-		#sleep 0.001
-	done
-	mapfile -t IPBlock < /etc/firewall/firewall.block.ip
-	for IP in "${IPBlock[@]}"; do
-		add_ipblock_actions "${IP}" &
-		#sleep 0.001
-	done
+	#for IP in "${IPBlock[@]}"; do
+	#	add_ipblock_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	#mapfile -t IPBlock < /etc/firewall/firewall.block.ip
+	#for IP in "${IPBlock[@]}"; do
+	#	add_ipblock_actions "${IP}" &
+	#	#sleep 0.001
+	#done
 	wait
+	sleep 600
+	insert_rules_with_test_ok_ipv4 "-D INPUT -m set --match-set $IPSLISTBADIP src -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D OUTPUT -m set --match-set $IPSLISTBADIP dst -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D FORWARD -m set --match-set $IPSLISTBADIP src -j DROP" ""
+	insert_rules_with_test_ok_ipv4 "-D FORWARD -m set --match-set $IPSLISTBADIP dst -j DROP" ""
 }
 
 add_ipblock_actions()
@@ -180,31 +196,39 @@ add_ipblock6()
 	local IP
 	wait $pid
 
+	insert_rules_with_test_ok_ipv6 "-I INPUT 1 -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I OUTPUT 1 -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I FORWARD 1 -m set --match-set ${IPSLISTBADIP}6 src -j DROP" "" &
+	insert_rules_with_test_ok_ipv6 "-I FORWARD 1 -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" "" &
+
 	$IPS save temp_${IPSLISTBADIP}6 > /tmp/temp_${IPSLISTBADIP}6 && $IPS destroy temp_${IPSLISTBADIP}6
 	for IP in "${IPBlock6[@]}"; do
 		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
-		#sleep 0.001
 	done
 	mapfile -t IPBlock6 < /etc/firewall/firewall.block.ip6
 	for IP in "${IPBlock6[@]}"; do
 		echo "add temp_${IPSLISTBADIP}6 ${IP}" >> /tmp/temp_${IPSLISTBADIP}6
-		#sleep 0.001
 	done
 	$IPS restore -! < /tmp/temp_${IPSLISTBADIP}6
 	$IPS swap temp_${IPSLISTBADIP}6 ${IPSLISTBADIP}6
 	$IPS destroy temp_${IPSLISTBADIP}6 &
 	rm /tmp/temp_${IPSLISTBADIP}6 &
 
-	for IP in "${IPBlock6[@]}"; do
-		add_ipblock6_actions "${IP}" &
-		#sleep 0.001
-	done
-	mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
-	for IP in "${IPBlock6[@]}"; do
-		add_ipblock6_actions "${IP}" &
-		#sleep 0.001
-	done
+	#for IP in "${IPBlock6[@]}"; do
+	#	add_ipblock6_actions "${IP}" &
+	#	#sleep 0.001
+	#done
+	#mapfile -t IPBlock6 < /etc/firewall/to_block.ipv6
+	#for IP in "${IPBlock6[@]}"; do
+	#	add_ipblock6_actions "${IP}" &
+	#	#sleep 0.001
+	#done
 	wait
+	sleep 600
+	insert_rules_with_test_ok_ipv6 "-D INPUT -m set --match-set ${IPSLISTBADIP}6 src -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D OUTPUT -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D FORWARD -m set --match-set ${IPSLISTBADIP}6 src -j DROP" ""
+	insert_rules_with_test_ok_ipv6 "-D FORWARD -m set --match-set ${IPSLISTBADIP}6 dst -j DROP" ""
 }
 
 add_ipblock6_actions()
@@ -294,6 +318,9 @@ get_ip_country_open() {
 		$IPS add ${setIP} ${network}
 	done
 }
+
+$IPS create ${IPSLISTBADIP} hash:net maxelem 999999999 2> /dev/null &
+$IPS create ${IPSLISTBADIP}6 hash:net maxelem 999999999 family inet6 2> /dev/null &
 
 add_doh &
 add_doh6 &
