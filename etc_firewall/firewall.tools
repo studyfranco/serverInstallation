@@ -34,6 +34,24 @@ insert_rules_quietly() # You can use it to remove rules too
 	return 0
 }
 
+insert_rules_quietly_v4() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid1
+	$IPT $cmd_args 2> /dev/null & pid1=$!
+	wait $pid1
+	return 0
+}
+
+insert_rules_quietly_v6() # You can use it to remove rules too
+{
+	local cmd_args=$1 # -t nat -I ? -m ? -j ?
+	local pid2
+	$IPT6 $cmd_args 2> /dev/null & pid2=$!
+	wait $pid2
+	return 0
+}
+
 insert_rules_with_test_ok_ipv4()
 {
 	local cmd_args=$1 # -t nat -I ? -m ? -j ?

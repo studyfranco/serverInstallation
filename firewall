@@ -1256,7 +1256,7 @@ generate_set_ip_net()
 			if [ ! -v netOK[${INTERC[1]}] ]; then
 				netOK[${INTERC[1]}]=0
 				# On fait un set des IPS car plus rapide pour le traitement
-				{ $IPS destroy ${INTERC[1]} 2> /dev/null; $IPS create ${INTERC[1]} hash:ip maxelem 999999999 2> /dev/null; } & pids+=($!)
+				{ $IPS destroy ${INTERC[1]} 2> /dev/null; $IPS create ${INTERC[1]} hash:net maxelem 999999999 2> /dev/null; } & pids+=($!)
 			fi
 		fi
 		if [ ! -z "${INTERC[2]}" ]; then
@@ -1380,7 +1380,7 @@ generate_set_ip_docker_net()
 					if is_ipv4_net "$subnet"; then
 						if [ ! -v netOK[${subnet}] ]; then
 							netOK[${subnet}]=0
-							{ $IPS create ${subnet} hash:ip maxelem 999999999 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
+							{ $IPS create ${subnet} hash:net maxelem 999999999 2> /dev/null; $IPS flush ${subnet} 2> /dev/null; } & pids+=($!)
 						fi
 					elif is_ipv6_net "$subnet"; then
 						if [ ! -v netOK[${subnet}] ]; then
