@@ -105,8 +105,9 @@ set_rules()
 	# On autorise les connexions dont l état est RELATED ou ESTABLISHED des packets
 	# On fais en sorte que les IPs autorisé puisse enfin avoir de la connectivité
 	echo "Réglages pour la continuité de reception"
-	$IPT -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" &
-	$IPT6 -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" &
+	$IPT -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv4 "-I INPUT 3 -m set --match-set $IPSLISTGOODIP src -g $CHAINIPALLOW" "" && echo "Réglages pour la continuité de reception ipv4 OK" &
+	$IPT6 -I INPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -g $CHAINOPENSATE && insert_rules_with_test_ok_ipv6 "-I INPUT 3 -m set --match-set ${IPSLISTGOODIP}6 src -g $CHAINIPALLOW" "" && echo "Réglages pour la continuité de reception ipv6 Ok" &
+	sleep 0.001
 	
 	# Creation des etats possibles
 	insert_rules "-A $CHAINOPENSATE -j ACCEPT" &
@@ -248,7 +249,7 @@ set_rules()
 	insert_network_docker_forward_link ${dockerNetworkWithInternetAccess[@]} ${dockerNetworkWithAccess[@]} &
 	
 	for NETWORK in ${dockerNetworkWithAccess[@]}; do
-		insert_rules_docker_network_host_access ${NETWORK} & pidsIntm+=($!)
+		sleep 0.01 && insert_rules_docker_network_host_access ${NETWORK} & pidsIntm+=($!)
 	done
 
 	# On configure les ouvertures de ports + redirection des ports
@@ -811,25 +812,23 @@ flush_rules()
 	insert_rules "-t raw -F PREROUTING" & pids+=($!)
 	insert_rules "-t nat -F PREROUTING" & pids+=($!)
 	insert_rules_quietly "-t raw -F $CHAINICMPTRAFIC" & pids+=($!)
-
-	for i in {1..3}; do
-		insert_rules_quietly "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
-		insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
-
-		insert_rules_quietly "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type BROADCAST -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type MULTICAST -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" & pidsb+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" & pids+=($!)
-		insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" & pids+=($!)
-	done
 	
+	insert_rules_quietly "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
+	insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
+
+	insert_rules_quietly "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type BROADCAST -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type MULTICAST -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" & pids+=($!)
+	insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" & pids+=($!)
+
 	for chain in "${SPECIALCHAINLIST[@]}"; do
 		insert_rules_quietly "-F $chain " & pids+=($!)
 	done
@@ -902,6 +901,24 @@ flush_rules()
 				fi
 			done
 		fi
+	done
+
+	for i in {1..3}; do
+		insert_rules_quietly "-D FORWARD -j $CHAINFORWARDTRAFIC" && insert_rules_quietly "-D FORWARD -j $CHAINFORWARDTRAFIC" & pids+=($!)
+		insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" && insert_rules_quietly "-D FORWARD -m conntrack ! --ctstate ESTABLISHED,RELATED -j $CHAINFORWARDFILTER" & pids+=($!)
+
+		insert_rules_quietly "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" && insert_rules_quietly "-t nat -D POSTROUTING -o $mainInter -j MASQUERADE" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type MULTICAST -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type BROADCAST -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type BROADCAST -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type MULTICAST -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type MULTICAST -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type BROADCAST -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --dst-type local -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -m addrtype --src-type local -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" && insert_rules_quietly "-t nat -D POSTROUTING -s 127.0.0.1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -m addrtype ! --dst-type BROADCAST -j MASQUERADE" & pidsb+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" && insert_rules_quietly "-t nat -D POSTROUTING -s ::1 -m conntrack --ctstate DNAT -m addrtype ! --dst-type MULTICAST -j MASQUERADE" & pidsb+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -d 224.0.0.0/24 -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" && insert_rules_quietly "-t nat -D POSTROUTING -d 255.255.255.255 -j RETURN" & pids+=($!)
+		insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" && insert_rules_quietly "-t nat -D OUTPUT -m addrtype --src-type local -m addrtype --dst-type local -j $CHAINIPALLOW" & pids+=($!)
 	done
 
 	wait "${pids[@]}"

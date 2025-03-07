@@ -278,31 +278,16 @@ insert_rules_list_docker_ports_to_host()
 	shift
 	local network_interface=$(get_bridge_name_docker_network "${network}")
 	if [ -n "${network_interface}" ]; then
-		local cmd_args=""
 		local option_t=$1 #-t nat/
 		shift
-		cmd_args+="$option_t"
 		local option_A_I=$1 #-A ?/-I ?
 		shift
-		cmd_args+=" $option_A_I"
-		local cmd_args_v4_end=""
-		local cmd_args_v6_end=""
 		local position_I=$1 #1/2/3/?/....
 		shift
-		if [ ! -z "${position_I}" ]; then
-			cmd_args_v4_end+=" ${position_I}"
-			cmd_args_v6_end+=" ${position_I}"
-		fi
 		local option_m_v4=$1 #-m set ! --match-set ${IPSLISTBADIP} src
 		shift
-		if [ ! -z "$option_m_v4" ]; then
-			cmd_args_v4_end+=" $option_m_v4"
-		fi
 		local option_m_v6=$1 #-m set ! --match-set ${IPSLISTBADIP}6 src
 		shift
-		if [ ! -z "$cmd_args_v6" ]; then
-			cmd_args_v6_end+=" $option_m_v6"
-		fi
 		local option_j=$1 #-j ACCEPT
 		shift
 		local proto=$1 #tcp/udp
@@ -318,15 +303,15 @@ insert_rules_list_docker_ports_to_host()
 				local ipv4=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.IPAddress }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
-					$IPT -C ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT ${cmd_args} ${chaintouse}${cmd_args_v4_end} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT ${option_t} -C ${chaintouse} ${option_m_v4} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT ${option_t} ${option_A_I} ${chaintouse} ${position_I} ${option_m_v4} -s ${ipv4} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
 			elif is_ipv6_net "$subnet"; then
 				local ipv6=$(${DOCKER} container inspect -f "{{ .NetworkSettings.Networks.${network}.GlobalIPv6Address }}" ${container_name})
 				local chaintouse=$(generate_chain_name "${CHAINMAININTER}-${network_interface}-${subnet}")
 				for PORT in "${ports[@]}"; do
-					$IPT6 -C ${cmd_args} ${chaintouse}${cmd_args_v6_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
-					|| $IPT6 ${cmd_args} ${chaintouse}${cmd_args_v6_end} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
+					$IPT6 ${option_t} -C  ${chaintouse} ${option_m_v6} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} 2> /dev/null \
+					|| $IPT6 ${option_t} ${option_A_I} ${chaintouse} ${position_I} ${option_m_v6} -s ${ipv6} -p ${proto} --dport ${PORT} ${option_j} & pids+=($!)
 				done
 			fi
 		done
